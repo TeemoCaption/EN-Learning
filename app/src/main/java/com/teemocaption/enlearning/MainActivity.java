@@ -194,7 +194,7 @@ public class MainActivity extends Activity {
             if (recent.isEmpty()) return;
             addSubheading("最近搜尋");
             for (String word : recent) {
-                content.addView(wordRow(word, "重新查詢", v -> lookupAndShow(word)));
+                content.addView(wordRow(word, "", v -> lookupAndShow(word)));
             }
         });
     }
