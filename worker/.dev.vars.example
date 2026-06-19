@@ -9,3 +9,6 @@ GOOGLE_TRANSLATE_API_KEY=
 
 # Safety cap below Google's monthly 500,000-character credit.
 GOOGLE_TRANSLATE_MONTHLY_LIMIT=450000
+
+# Number of dictionary example sentences translated to Traditional Chinese.
+GOOGLE_TRANSLATE_EXAMPLE_LIMIT=3

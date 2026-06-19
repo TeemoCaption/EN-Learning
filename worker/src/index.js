@@ -5,6 +5,7 @@ const GOOGLE_TRANSLATE_SOURCE = "google_cloud_translation";
 const DEFAULT_CACHE_TTL_SECONDS = 60 * 60 * 24 * 14;
 const DEFAULT_BATCH_LIMIT = 50;
 const DEFAULT_GOOGLE_TRANSLATE_MONTHLY_LIMIT = 450000;
+const DEFAULT_EXAMPLE_TRANSLATION_LIMIT = 3;
 const REQUEST_TIMEOUT_MS = 7000;
 
 const CORS_HEADERS = {
@@ -29,6 +30,7 @@ export default {
           hasDatabase: Boolean(env.DB),
           hasGoogleTranslate: Boolean(env.DB && env.GOOGLE_TRANSLATE_API_KEY),
           googleTranslateMonthlyLimit: getGoogleTranslateMonthlyLimit(env),
+          googleTranslateExampleLimit: getExampleTranslationLimit(env),
         });
       }
 
@@ -178,16 +180,7 @@ async function lookupWord(rawTerm, env, options = {}) {
     errors.push(translationResult.error);
   }
 
-  const exampleTranslations = new Map();
-  const firstExample = definitions.find((item) => item.example)?.example ?? "";
-  if (firstExample) {
-    const exampleTranslationResult = await tryTranslateTextWithGoogle(firstExample, env, "example");
-    if (exampleTranslationResult.ok) {
-      exampleTranslations.set(firstExample, exampleTranslationResult.translation);
-    } else if (exampleTranslationResult.error) {
-      errors.push(exampleTranslationResult.error);
-    }
-  }
+  const exampleTranslations = await translateDictionaryExamplesWithGoogle(definitions, env, errors);
 
   const payload = buildWordPayload({
     term,
@@ -222,6 +215,23 @@ async function tryTranslateTextWithGoogle(inputText, env, purpose) {
       },
     };
   }
+}
+
+async function translateDictionaryExamplesWithGoogle(definitions, env, errors) {
+  const exampleTranslations = new Map();
+  const examples = uniqueStrings(definitions.map((item) => item.example).filter(Boolean))
+    .slice(0, getExampleTranslationLimit(env));
+
+  for (const example of examples) {
+    const exampleTranslationResult = await tryTranslateTextWithGoogle(example, env, "example");
+    if (exampleTranslationResult.ok) {
+      exampleTranslations.set(example, exampleTranslationResult.translation);
+    } else if (exampleTranslationResult.error) {
+      errors.push(exampleTranslationResult.error);
+    }
+  }
+
+  return exampleTranslations;
 }
 
 function buildWordPayload({
@@ -899,6 +909,15 @@ function toHex(buffer) {
   return [...new Uint8Array(buffer)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function getExampleTranslationLimit(env) {
+  const parsed = Number.parseInt(env?.GOOGLE_TRANSLATE_EXAMPLE_LIMIT ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_EXAMPLE_TRANSLATION_LIMIT;
+  }
+
+  return Math.min(parsed, 10);
 }
 
 function cleanChineseMeaning(text) {

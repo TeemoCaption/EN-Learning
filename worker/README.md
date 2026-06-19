@@ -9,9 +9,10 @@
 - `POST /batch-words`：批次查詢單字，給文件匯入後補資料使用。
 - 整合 Free Dictionary API，補英文定義、例句、音標與部分同義字資料。
 - 整合 Datamuse API，補同義字、近義字與相關字。
-- 整合 Google Cloud Translation API，補中文意思與第一句例句中文翻譯。
+- 整合 Google Cloud Translation API，補中文意思與最多前三句例句中文翻譯。
 - 使用 D1 快取 Google 翻譯結果；同一個單字或同一句例句翻譯過後，不會重複呼叫 Google。
 - 使用 D1 記錄 Google 翻譯每月字元用量，預設達 450,000 字元就停止呼叫，保留 50,000 字元緩衝。
+- 英文例句仍由線上辭典來源提供；Google Cloud Translation API 負責把英文例句翻成繁體中文，不負責產生新的英文例句。
 - 預留 D1 的 `ecdict_words` 表，之後可匯入 ECDICT，提供中文意思與音標備援。
 - 中文意思主要使用 Google 官方翻譯；若 Google 未設定或已達保護上限，才會使用 ECDICT 作為備援。
 
@@ -125,7 +126,7 @@ npm run d1:migrate:remote
 npx wrangler secret put GOOGLE_TRANSLATE_API_KEY
 ```
 
-請在 Google Cloud Console 另外設定 Cloud Translation API 的用量配額與預算警示。Worker 內建的 `GOOGLE_TRANSLATE_MONTHLY_LIMIT=450000` 是第二層保護，會在達到 45 萬字元時停止呼叫 Google；真正避免扣款仍建議在 Google Cloud 後台把每月配額限制在免費額度內。
+請在 Google Cloud Console 另外設定 Cloud Translation API 的用量配額與預算警示。Worker 內建的 `GOOGLE_TRANSLATE_MONTHLY_LIMIT=450000` 是第二層保護，會在達到 45 萬字元時停止呼叫 Google；`GOOGLE_TRANSLATE_EXAMPLE_LIMIT=3` 會限制每次單字查詢最多翻譯前三句例句；真正避免扣款仍建議在 Google Cloud 後台把每月配額限制在免費額度內。
 
 部署：
 
