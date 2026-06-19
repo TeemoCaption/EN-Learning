@@ -96,9 +96,18 @@ public final class WordNormalizer {
     private static String cleanInput(String input) {
         if (input == null) return "";
         String cleaned = input.trim().toLowerCase(Locale.US).replace('’', '\'');
-        cleaned = cleaned.replaceAll("^[^a-z]+|[^a-z]+$", "");
-        cleaned = cleaned.replaceAll("[^a-z'-]", "");
-        return cleaned;
+        String[] pieces = cleaned.split("\\s+");
+        List<String> words = new ArrayList<>();
+        for (String piece : pieces) {
+            String word = piece
+                    .replaceAll("^[^a-z]+|[^a-z]+$", "")
+                    .replaceAll("[^a-z'-]", "");
+            if (!word.isEmpty()) {
+                words.add(word);
+                if (words.size() >= 4) break;
+            }
+        }
+        return String.join(" ", words);
     }
 
     private static String removeDoubledEnding(String stem) {

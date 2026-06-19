@@ -781,7 +781,9 @@ function validateTerm(rawTerm) {
     .trim()
     .toLowerCase()
     .replace(/[’`]/g, "'")
-    .replace(/[^a-z'-]/g, "");
+    .replace(/[^a-z'\-\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
   if (!term) {
     return {
@@ -797,10 +799,10 @@ function validateTerm(rawTerm) {
     };
   }
 
-  if (!/^[a-z]+(?:['-][a-z]+)*$/.test(term)) {
+  if (!/^[a-z]+(?:['-][a-z]+)*(?: [a-z]+(?:['-][a-z]+)*){0,3}$/.test(term)) {
     return {
       ok: false,
-      reason: "Term must be a single English word.",
+      reason: "Term must be an English word or short phrase.",
     };
   }
 

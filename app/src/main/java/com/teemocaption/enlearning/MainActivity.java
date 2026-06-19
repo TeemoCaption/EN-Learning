@@ -21,6 +21,7 @@ import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Space;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -221,20 +222,10 @@ public class MainActivity extends Activity {
 
         addWordStudyCard(entry);
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.addView(primaryButton("收藏", R.drawable.ic_book, v -> {
-            repository.addToBook(entry, "manual", "手動搜尋");
-            Toast.makeText(this, "已加入收藏。", Toast.LENGTH_SHORT).show();
-            showWordDetail(entry);
-        }), buttonWeight());
-        actions.addView(secondaryButton("重查", R.drawable.ic_search, v -> lookupAndShow(entry.word)), buttonWeight());
-        content.addView(actions, fullWidth());
-
         UserWord userWord = database.getUserWord(entry.word);
         if (userWord != null) addFamiliarityControls(entry.word, userWord.familiarity);
-        addListField("同義字", entry.synonyms, false);
-        addListField("近義字", entry.relatedWords, false);
+        addClickableWordListField("同義字", entry.synonyms);
+        addClickableWordListField("近義字", entry.relatedWords);
     }
 
     private void addFamiliarityControls(String word, int familiarity) {
@@ -486,6 +477,57 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void addClickableWordListField(String label, List<String> values) {
+        if (values == null || values.isEmpty()) return;
+        addSubheading(label);
+
+        LinearLayout row = null;
+        int index = 0;
+        for (String rawValue : values) {
+            String value = rawValue == null ? "" : rawValue.trim();
+            if (value.isEmpty()) continue;
+
+            if (index % 2 == 0) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                content.addView(row, fullWidth());
+            }
+
+            TextView chip = new TextView(this);
+            chip.setText(value);
+            chip.setTextColor(COLOR_INK);
+            chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+            chip.setTypeface(Typeface.DEFAULT_BOLD);
+            chip.setGravity(Gravity.CENTER_VERTICAL);
+            chip.setMinHeight(dp(44));
+            chip.setPadding(dp(12), dp(8), dp(12), dp(8));
+            chip.setBackground(makeBg(0xFFF3E8FF, 0xFFD8B4FE, 8));
+            chip.setClickable(true);
+            chip.setFocusable(true);
+            chip.setContentDescription("查詢 " + value);
+            chip.setOnClickListener(v -> lookupAndShow(value));
+
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f);
+            params.setMargins(index % 2 == 0 ? 0 : dp(6), 0, index % 2 == 0 ? dp(6) : 0, dp(8));
+            if (row != null) row.addView(chip, params);
+            index++;
+        }
+
+        if (row != null && row.getChildCount() == 1) {
+            Space spacer = new Space(this);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f);
+            params.setMargins(dp(6), 0, 0, dp(8));
+            row.addView(spacer, params);
+        }
+    }
+
     private void addWordStudyCard(WordEntry entry) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -558,13 +600,6 @@ public class MainActivity extends Activity {
         if (!isBlank(entry.englishDefinition)) {
             addDefinitionCard(card, firstDefinitionText(entry.englishDefinition));
         }
-
-        TextView footer = new TextView(this);
-        footer.setText("來源：" + (isBlank(entry.source) ? "網路字典" : entry.source));
-        footer.setTextColor(0xFFB8B8B8);
-        footer.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        footer.setPadding(dp(8), dp(42), 0, 0);
-        card.addView(footer, fullWidthNoMargin());
 
         content.addView(card, fullWidth());
 
