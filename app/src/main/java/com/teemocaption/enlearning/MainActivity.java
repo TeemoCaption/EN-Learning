@@ -306,7 +306,7 @@ public class MainActivity extends Activity {
         addHeading("匯入文件");
         addBody("支援 txt、csv、docx 與可選取文字的 pdf。掃描型 PDF 第一階段會提示不支援圖片文字辨識。");
         content.addView(primaryButton("選擇文件", R.drawable.ic_import, v -> openDocumentPicker()), fullWidth());
-        addBody("匯入後會先抽出英文單字、去重，再逐字網路查詢中文意思、音標與例句。");
+        addBody("匯入後會先抽出英文單字、去重，再逐字網路查詢中文意思、音標與例句，整理好的單字會自動加入收藏頁。");
     }
 
     private void openDocumentPicker() {
@@ -389,6 +389,7 @@ public class MainActivity extends Activity {
         addField("成功補齊", String.valueOf(summary.success));
         addField("部分補齊", String.valueOf(summary.partial));
         addField("需補查資料", String.valueOf(summary.failed));
+        addBody("匯入的單字已加入收藏頁，可以直接查看與複習。");
         content.addView(primaryButton("查看收藏", R.drawable.ic_book, v -> showBook()), fullWidth());
     }
 

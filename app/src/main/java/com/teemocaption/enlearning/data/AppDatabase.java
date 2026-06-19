@@ -120,8 +120,23 @@ public class AppDatabase extends SQLiteOpenHelper {
     }
 
     public synchronized List<WordEntry> getWordsForBook() {
-        String sql = "SELECT w.* FROM word_entries w " +
-                "JOIN user_words u ON u.word = w.word " +
+        String sql = "SELECT " +
+                "COALESCE(w.word, u.word) AS word, " +
+                "w.original_word, " +
+                "w.chinese_meaning, " +
+                "w.phonetic, " +
+                "w.part_of_speech, " +
+                "w.english_definition, " +
+                "w.examples, " +
+                "w.example_translations, " +
+                "w.synonyms, " +
+                "w.related_words, " +
+                "COALESCE(w.source, u.source_name, '') AS source, " +
+                "COALESCE(w.updated_at, u.added_at) AS updated_at, " +
+                "CASE WHEN w.word IS NULL THEN 1 ELSE w.partial END AS partial " +
+                "FROM user_words u " +
+                "LEFT JOIN word_entries w ON w.word = u.word " +
+                "WHERE u.favorite = 1 " +
                 "ORDER BY u.added_at DESC";
         List<WordEntry> entries = new ArrayList<>();
         try (Cursor cursor = getReadableDatabase().rawQuery(sql, null)) {
