@@ -6,7 +6,7 @@ workers_dev = true
 
 [[d1_databases]]
 binding = "DB"
-database_name = "en_learning_dictionary"
+database_name = "en_learning"
 database_id = "REPLACE_WITH_D1_DATABASE_ID"
 
 [vars]

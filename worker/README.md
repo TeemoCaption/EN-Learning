@@ -67,7 +67,7 @@
 ```powershell
 cd worker
 npm install
-npx wrangler d1 create en_learning_dictionary
+npx wrangler d1 create en_learning
 ```
 
 把 Cloudflare 回傳的 `database_id` 填入 `wrangler.toml` 的 `database_id`。
@@ -108,7 +108,7 @@ npx wrangler login
 建立 D1 資料庫：
 
 ```powershell
-npx wrangler d1 create en_learning_dictionary
+npx wrangler d1 create en_learning
 ```
 
 把回傳的 `database_id` 填入 `wrangler.toml`。
