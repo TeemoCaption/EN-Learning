@@ -7,7 +7,7 @@ workers_dev = true
 [[d1_databases]]
 binding = "DB"
 database_name = "en_learning"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "a8c5e3e8-c527-499f-8de1-a0dd45d5e9cb"
 
 [vars]
 CACHE_TTL_SECONDS = "1209600"
