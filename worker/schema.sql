@@ -20,6 +20,31 @@ CREATE TABLE IF NOT EXISTS word_cache (
 CREATE INDEX IF NOT EXISTS idx_word_cache_expires_at
   ON word_cache (expires_at);
 
+CREATE TABLE IF NOT EXISTS word_aliases (
+  alias_term TEXT PRIMARY KEY,
+  canonical_term TEXT NOT NULL,
+  source TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_word_aliases_canonical
+  ON word_aliases (canonical_term);
+
+INSERT OR IGNORE INTO word_aliases
+  (alias_term, canonical_term, source, created_at, updated_at)
+SELECT
+  term,
+  LOWER(TRIM(canonical_word)),
+  'word_cache_backfill',
+  CURRENT_TIMESTAMP,
+  CURRENT_TIMESTAMP
+FROM word_cache
+WHERE canonical_word IS NOT NULL
+  AND TRIM(canonical_word) != ''
+  AND LENGTH(TRIM(canonical_word)) <= 64
+  AND LOWER(TRIM(canonical_word)) != term;
+
 CREATE TABLE IF NOT EXISTS lookup_failures (
   term TEXT PRIMARY KEY,
   reason TEXT NOT NULL,

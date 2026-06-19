@@ -535,13 +535,15 @@ async function lookupWord(rawTerm, env, options = {}) {
   const term = validation.term;
 
   if (!options.refresh) {
-    const cached = await readWordCache(env.DB, term);
+    const cached = await readCachedWordPayload(env.DB, term, env);
     if (cached) {
       return {
-        ...cached,
+        ...cached.payload,
         ok: true,
         fromCache: true,
-        cacheStatus: "fresh",
+        cacheStatus: cached.aliasTerm ? "alias" : "fresh",
+        requestedTerm: term,
+        canonicalTerm: cached.canonicalTerm,
       };
     }
   }
@@ -570,7 +572,7 @@ async function lookupWord(rawTerm, env, options = {}) {
 
   const exampleTranslations = await translateDictionaryExamplesWithGoogle(definitions, env, errors);
 
-  const payload = buildWordPayload({
+  let payload = buildWordPayload({
     term,
     ecdict,
     freeDictionary,
@@ -579,6 +581,12 @@ async function lookupWord(rawTerm, env, options = {}) {
     exampleTranslations,
     errors,
   });
+
+  const canonicalTerm = canonicalTermFromPayload(payload, term);
+  if (canonicalTerm !== term) {
+    payload = normalizePayloadForCanonicalTerm(payload, canonicalTerm);
+    await writeWordAlias(env.DB, term, canonicalTerm, "canonical_word");
+  }
 
   await writeWordCache(env.DB, payload, env);
 
@@ -964,6 +972,94 @@ async function readEcdictWord(db, term) {
   return row ?? null;
 }
 
+async function readCachedWordPayload(db, term, env) {
+  if (!db) {
+    return null;
+  }
+
+  const alias = await readWordAlias(db, term);
+  if (alias?.canonical_term) {
+    const canonicalTerm = canonicalTermFromRaw(alias.canonical_term, term);
+    if (canonicalTerm !== term) {
+      const aliasedPayload = await readWordCache(db, canonicalTerm);
+      if (aliasedPayload) {
+        return {
+          payload: aliasedPayload,
+          aliasTerm: term,
+          canonicalTerm,
+        };
+      }
+    }
+  }
+
+  const inferred = await readCachedCanonicalCandidate(db, term);
+  if (inferred) {
+    await writeWordAlias(db, term, inferred.canonicalTerm, "derived_cache");
+    return {
+      payload: inferred.payload,
+      aliasTerm: term,
+      canonicalTerm: inferred.canonicalTerm,
+    };
+  }
+
+  const exactPayload = await readWordCache(db, term);
+  if (!exactPayload) {
+    return null;
+  }
+
+  const canonicalTerm = canonicalTermFromPayload(exactPayload, term);
+  if (canonicalTerm !== term) {
+    await writeWordAlias(db, term, canonicalTerm, "cached_payload");
+    const canonicalPayload = normalizePayloadForCanonicalTerm(exactPayload, canonicalTerm);
+    await writeWordCache(db, canonicalPayload, env);
+    return {
+      payload: canonicalPayload,
+      aliasTerm: term,
+      canonicalTerm,
+    };
+  }
+
+  return {
+    payload: exactPayload,
+    aliasTerm: "",
+    canonicalTerm,
+  };
+}
+
+async function readCachedCanonicalCandidate(db, term) {
+  for (const candidate of canonicalCandidatesForTerm(term)) {
+    if (candidate === term) {
+      continue;
+    }
+
+    const payload = await readWordCache(db, candidate);
+    if (payload) {
+      return {
+        payload,
+        canonicalTerm: candidate,
+      };
+    }
+  }
+
+  return null;
+}
+
+async function readWordAlias(db, aliasTerm) {
+  if (!db) {
+    return null;
+  }
+
+  return await db
+    .prepare(
+      `SELECT canonical_term, source, updated_at
+       FROM word_aliases
+       WHERE alias_term = ?
+       LIMIT 1`,
+    )
+    .bind(aliasTerm)
+    .first();
+}
+
 async function readWordCache(db, term) {
   if (!db) {
     return null;
@@ -1013,6 +1109,132 @@ function stripUnsupportedRelatedWords(payload) {
   }
 
   return payload;
+}
+
+async function writeWordAlias(db, aliasTerm, canonicalTerm, source) {
+  if (!db) {
+    return;
+  }
+
+  const alias = canonicalTermFromRaw(aliasTerm, "");
+  const canonical = canonicalTermFromRaw(canonicalTerm, "");
+  if (!alias || !canonical || alias === canonical) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  await db
+    .prepare(
+      `INSERT INTO word_aliases (alias_term, canonical_term, source, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(alias_term) DO UPDATE SET
+         canonical_term = excluded.canonical_term,
+         source = excluded.source,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(alias, canonical, cleanSmallText(source, "runtime"), now, now)
+    .run();
+}
+
+function canonicalTermFromPayload(payload, fallbackTerm) {
+  return canonicalTermFromRaw(
+    payload?.entry?.canonicalWord
+      || payload?.entry?.word
+      || payload?.normalizedTerm
+      || payload?.term,
+    fallbackTerm,
+  );
+}
+
+function canonicalTermFromRaw(rawTerm, fallbackTerm) {
+  const validation = validateTerm(rawTerm);
+  if (validation.ok) {
+    return validation.term;
+  }
+
+  const fallback = validateTerm(fallbackTerm);
+  return fallback.ok ? fallback.term : "";
+}
+
+function normalizePayloadForCanonicalTerm(payload, canonicalTerm) {
+  if (!payload || !canonicalTerm) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    term: canonicalTerm,
+    normalizedTerm: canonicalTerm,
+    entry: {
+      ...(payload.entry ?? {}),
+      word: canonicalTerm,
+      canonicalWord: canonicalTerm,
+    },
+  };
+}
+
+function canonicalCandidatesForTerm(term) {
+  const validation = validateTerm(term);
+  if (!validation.ok) {
+    return [];
+  }
+
+  const normalized = validation.term;
+  const parts = normalized.split(" ");
+  if (parts.length > 1) {
+    const phrase = parts
+      .map((part) => canonicalCandidatesForToken(part)[0] ?? part)
+      .join(" ");
+    return uniqueStrings([phrase]);
+  }
+
+  return canonicalCandidatesForToken(normalized);
+}
+
+function canonicalCandidatesForToken(token) {
+  const candidates = [];
+  if (!/^[a-z]+(?:['-][a-z]+)?$/.test(token) || token.length <= 3) {
+    return candidates;
+  }
+
+  if (token.endsWith("ies") && token.length > 4) {
+    candidates.push(`${token.slice(0, -3)}y`);
+  }
+  if (token.endsWith("ves") && token.length > 4) {
+    candidates.push(`${token.slice(0, -3)}f`);
+  }
+  if (token.endsWith("ied") && token.length > 4) {
+    candidates.push(`${token.slice(0, -3)}y`);
+  }
+  if (token.endsWith("ing") && token.length > 5) {
+    const stem = token.slice(0, -3);
+    candidates.push(stem);
+    candidates.push(removeDoubledEnding(stem));
+    candidates.push(`${stem}e`);
+  }
+  if (token.endsWith("ed") && token.length > 4) {
+    const stem = token.slice(0, -2);
+    candidates.push(stem);
+    candidates.push(removeDoubledEnding(stem));
+    candidates.push(`${stem}e`);
+  }
+  if (token.endsWith("es") && token.length > 4) {
+    candidates.push(token.slice(0, -2));
+  }
+  if (token.endsWith("s") && token.length > 3 && !token.endsWith("ss")) {
+    candidates.push(token.slice(0, -1));
+  }
+
+  return uniqueStrings(candidates.filter((candidate) => validateTerm(candidate).ok));
+}
+
+function removeDoubledEnding(value) {
+  if (!value || value.length < 3) {
+    return value;
+  }
+
+  const last = value.length - 1;
+  return value[last] === value[last - 1] ? value.slice(0, last) : value;
 }
 
 async function writeWordCache(db, payload, env) {
