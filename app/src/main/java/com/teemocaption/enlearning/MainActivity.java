@@ -2,6 +2,7 @@ package com.teemocaption.enlearning;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
@@ -27,7 +28,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.teemocaption.enlearning.data.AppDatabase;
-import com.teemocaption.enlearning.data.UserWord;
+import com.teemocaption.enlearning.data.AuthSession;
 import com.teemocaption.enlearning.data.WordEntry;
 import com.teemocaption.enlearning.data.WordRepository;
 import com.teemocaption.enlearning.importing.DocumentTextReader;
@@ -36,12 +37,18 @@ import com.teemocaption.enlearning.util.SpeechController;
 import com.teemocaption.enlearning.util.WordNormalizer;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int REQUEST_IMPORT_DOCUMENT = 4101;
+    private static final String PREFS_AUTH = "member_auth";
+    private static final String PREF_TOKEN = "token";
+    private static final String PREF_EMAIL = "email";
+    private static final String PREF_EXPIRES_AT = "expires_at";
     private static final int COLOR_BG = 0xFFF7F3EA;
     private static final int COLOR_SURFACE = 0xFFFFFFFF;
     private static final int COLOR_INK = 0xFF253247;
@@ -57,6 +64,7 @@ public class MainActivity extends Activity {
 
     private AppDatabase database;
     private WordRepository repository;
+    private WordApiClient wordApiClient;
     private DocumentTextReader documentTextReader;
     private SpeechController speechController;
     private ExecutorService executor;
@@ -68,16 +76,22 @@ public class MainActivity extends Activity {
     private float bookSwipeStartX;
     private float bookSwipeStartY;
     private boolean bookSwipeTracking;
+    private String authToken = "";
+    private String authEmail = "";
+    private String authExpiresAt = "";
+    private final Set<String> cloudFavoriteWords = new HashSet<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         database = new AppDatabase(this);
-        repository = new WordRepository(database, new WordApiClient());
+        wordApiClient = new WordApiClient();
+        repository = new WordRepository(database, wordApiClient);
         documentTextReader = new DocumentTextReader();
         speechController = new SpeechController(this);
         executor = Executors.newFixedThreadPool(4);
         mainHandler = new Handler(Looper.getMainLooper());
+        loadAuthSession();
         buildShell();
         showHome();
     }
@@ -103,6 +117,37 @@ public class MainActivity extends Activity {
             Uri uri = data.getData();
             if (uri != null) handleImport(uri);
         }
+    }
+
+    private void loadAuthSession() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_AUTH, MODE_PRIVATE);
+        authToken = prefs.getString(PREF_TOKEN, "");
+        authEmail = prefs.getString(PREF_EMAIL, "");
+        authExpiresAt = prefs.getString(PREF_EXPIRES_AT, "");
+    }
+
+    private void saveAuthSession(AuthSession session) {
+        authToken = session == null ? "" : safeString(session.token);
+        authEmail = session == null ? "" : safeString(session.email);
+        authExpiresAt = session == null ? "" : safeString(session.expiresAt);
+        getSharedPreferences(PREFS_AUTH, MODE_PRIVATE)
+                .edit()
+                .putString(PREF_TOKEN, authToken)
+                .putString(PREF_EMAIL, authEmail)
+                .putString(PREF_EXPIRES_AT, authExpiresAt)
+                .apply();
+    }
+
+    private void clearAuthSession() {
+        authToken = "";
+        authEmail = "";
+        authExpiresAt = "";
+        cloudFavoriteWords.clear();
+        getSharedPreferences(PREFS_AUTH, MODE_PRIVATE).edit().clear().apply();
+    }
+
+    private boolean isLoggedIn() {
+        return !isBlank(authToken);
     }
 
     private void buildShell() {
@@ -223,7 +268,7 @@ public class MainActivity extends Activity {
     private void showSearch() {
         resetContent();
         addHeading("羊駝單字搜尋");
-        addBody("輸入英文單字，小羊駝會優先上網找資料；成功後會存進本機快取，離線時也能看已查過的單字。");
+        addBody("輸入英文單字，小羊駝會優先上網找資料；收藏會存到會員雲端單字本，不會寫入手機本機收藏快取。");
 
         EditText input = new EditText(this);
         input.setSingleLine(true);
@@ -274,6 +319,58 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void showMemberLogin() {
+        resetContent();
+        addHeading("會員登入");
+        addBody("登入後，收藏單字會存到雲端資料庫；這台手機不再保存本機收藏快取。");
+
+        EditText email = new EditText(this);
+        email.setSingleLine(true);
+        email.setHint("信箱");
+        email.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        email.setTextColor(COLOR_INK);
+        email.setHintTextColor(0xFF9CA3AF);
+        email.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        email.setPadding(dp(14), dp(10), dp(14), dp(10));
+        email.setBackground(makeBg(COLOR_SURFACE, COLOR_MINT, 8));
+        content.addView(email, fullWidth());
+
+        EditText password = new EditText(this);
+        password.setSingleLine(true);
+        password.setHint("密碼，至少 8 個字元");
+        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        password.setTextColor(COLOR_INK);
+        password.setHintTextColor(0xFF9CA3AF);
+        password.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        password.setPadding(dp(14), dp(10), dp(14), dp(10));
+        password.setBackground(makeBg(COLOR_SURFACE, COLOR_MINT, 8));
+        content.addView(password, fullWidth());
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(primaryButton("登入", R.drawable.ic_book,
+                v -> authenticateMember(false, email.getText().toString(), password.getText().toString())),
+                buttonWeight());
+        row.addView(secondaryButton("註冊", R.drawable.ic_import,
+                v -> authenticateMember(true, email.getText().toString(), password.getText().toString())),
+                buttonWeight());
+        content.addView(row, fullWidth());
+    }
+
+    private void authenticateMember(boolean register, String email, String password) {
+        String action = register ? "註冊" : "登入";
+        showLoading(action + "中，正在連線到雲端會員服務。");
+        runBackground(
+                () -> register
+                        ? wordApiClient.register(email, password)
+                        : wordApiClient.login(email, password),
+                session -> {
+                    saveAuthSession(session);
+                    Toast.makeText(this, action + "成功。", Toast.LENGTH_SHORT).show();
+                    showBook();
+                });
+    }
+
     private void lookupAndShow(String rawWord) {
         List<String> candidates = WordNormalizer.lookupCandidates(rawWord);
         if (candidates.isEmpty()) {
@@ -309,20 +406,18 @@ public class MainActivity extends Activity {
 
         addWordStudyCard(entry);
 
-        UserWord userWord = database.getUserWord(entry.word);
-        if (userWord != null) addFamiliarityControls(entry.word, userWord.familiarity);
+        if (isCloudFavorite(entry.word) || entry.favorite) {
+            entry.favorite = true;
+            addFamiliarityControls(entry);
+        }
         addClickableWordListField("同義字", entry.synonyms);
         addClickableWordListField("近義字", entry.relatedWords);
     }
 
-    private void refreshWordDetail(String word) {
-        WordEntry updated = database.getWord(word);
-        if (hasBookSwipeContext() && isCurrentBookWord(word)) {
-            if (updated != null) bookSwipeEntries.set(bookSwipeIndex, updated);
-            renderWordDetail(updated);
-            return;
+    private void updateCurrentBookEntry(WordEntry entry) {
+        if (entry != null && hasBookSwipeContext() && isCurrentBookWord(entry.word)) {
+            bookSwipeEntries.set(bookSwipeIndex, entry);
         }
-        showWordDetail(updated);
     }
 
     private void clearBookSwipeContext() {
@@ -401,37 +496,91 @@ public class MainActivity extends Activity {
                 && y <= location[1] + view.getHeight();
     }
 
-    private void addFamiliarityControls(String word, int familiarity) {
+    private void addFamiliarityControls(WordEntry entry) {
+        String word = entry.word;
+        int familiarity = entry.familiarity;
         addSubheading("熟悉度：" + familiarity + " / 5");
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.addView(secondaryButton("降低", v -> {
-            database.updateFamiliarity(word, familiarity - 1);
-            refreshWordDetail(word);
+            updateCloudFamiliarity(entry, familiarity - 1);
         }), buttonWeight());
         row.addView(secondaryButton("提高", v -> {
-            database.updateFamiliarity(word, familiarity + 1);
-            refreshWordDetail(word);
+            updateCloudFamiliarity(entry, familiarity + 1);
         }), buttonWeight());
         row.addView(dangerButton("移除", v -> {
-            database.removeUserWord(word);
-            Toast.makeText(this, "已從單字本移除。", Toast.LENGTH_SHORT).show();
-            showBook();
+            removeCloudFavorite(entry, null);
         }), buttonWeight());
         content.addView(row, fullWidth());
     }
 
+    private void updateCloudFamiliarity(WordEntry entry, int requestedFamiliarity) {
+        if (!isLoggedIn()) {
+            showMemberLogin();
+            return;
+        }
+        int next = Math.max(0, Math.min(5, requestedFamiliarity));
+        runBackground(
+                () -> wordApiClient.updateBookFamiliarity(authToken, entry.word, next),
+                updated -> {
+                    entry.familiarity = updated;
+                    entry.favorite = true;
+                    updateCurrentBookEntry(entry);
+                    renderWordDetail(entry);
+                });
+    }
+
+    private void removeCloudFavorite(WordEntry entry, ImageButton favoriteButton) {
+        if (!isLoggedIn()) {
+            showMemberLogin();
+            return;
+        }
+        runBackground(
+                () -> {
+                    wordApiClient.removeBookWord(authToken, entry.word);
+                    return true;
+                },
+                ignored -> {
+                    String normalized = normalizeWord(entry.word);
+                    cloudFavoriteWords.remove(normalized);
+                    entry.favorite = false;
+                    Toast.makeText(this, "已取消收藏。", Toast.LENGTH_SHORT).show();
+                    if (hasBookSwipeContext() && isCurrentBookWord(entry.word)) {
+                        bookSwipeEntries.remove(bookSwipeIndex);
+                        if (bookSwipeEntries.isEmpty()) {
+                            showBook();
+                            return;
+                        }
+                        if (bookSwipeIndex >= bookSwipeEntries.size()) bookSwipeIndex = bookSwipeEntries.size() - 1;
+                        renderWordDetail(bookSwipeEntries.get(bookSwipeIndex));
+                        return;
+                    }
+                    if (favoriteButton != null) updateFavoriteButton(favoriteButton, entry);
+                });
+    }
+
     private void showBook() {
+        if (!isLoggedIn()) {
+            showMemberLogin();
+            return;
+        }
         resetContent();
         addHeading("收藏單字");
-        addBody("這裡會顯示手動收藏與文件匯入後補齊的單字。");
-        showLoadingInline("正在整理收藏...");
-        runBackground(() -> database.getWordsForBook(), words -> {
+        addBody("目前登入：" + authEmail + "。收藏會從雲端資料庫同步。");
+        showLoadingInline("正在同步雲端收藏...");
+        runBackground(() -> wordApiClient.getBook(authToken), words -> {
+            updateCloudFavoriteWords(words);
             resetContent();
             addHeading("收藏單字");
+            addBody("目前登入：" + authEmail + "。收藏會從雲端資料庫同步。");
+            content.addView(secondaryButton("登出", v -> {
+                clearAuthSession();
+                Toast.makeText(this, "已登出。", Toast.LENGTH_SHORT).show();
+                showMemberLogin();
+            }), fullWidth());
             if (words.isEmpty()) {
                 addMonsterPanel("收藏還是空的",
-                        "先餵一個單字，或丟一份文件給小羊駝，牠就會開始整理單字卡。");
+                        "先搜尋一個單字，或匯入一份文件，小羊駝會把收藏同步到雲端。");
                 content.addView(primaryButton("去搜尋", R.drawable.ic_search, v -> showSearch()), fullWidth());
                 content.addView(secondaryButton("去匯入", R.drawable.ic_import, v -> showImport()), fullWidth());
                 return;
@@ -444,12 +593,26 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void updateCloudFavoriteWords(List<WordEntry> words) {
+        cloudFavoriteWords.clear();
+        if (words == null) return;
+        for (WordEntry entry : words) {
+            String word = normalizeWord(entry == null ? "" : entry.word);
+            if (!word.isEmpty()) cloudFavoriteWords.add(word);
+            if (entry != null) entry.favorite = true;
+        }
+    }
+
     private void showImport() {
+        if (!isLoggedIn()) {
+            showMemberLogin();
+            return;
+        }
         resetContent();
         addHeading("匯入文件");
         addBody("支援 txt、csv、docx 與可選取文字的 pdf。掃描型 PDF 第一階段會提示不支援圖片文字辨識。");
         content.addView(primaryButton("選擇文件", R.drawable.ic_import, v -> openDocumentPicker()), fullWidth());
-        addBody("匯入後會先抽出英文單字、去重，再逐字網路查詢中文意思、音標與例句，整理好的單字會自動加入收藏頁。");
+        addBody("匯入後會先抽出英文單字、去重，再逐字網路查詢中文意思、音標與例句，整理好的單字會直接加入雲端收藏頁。");
     }
 
     private void openDocumentPicker() {
@@ -466,6 +629,10 @@ public class MainActivity extends Activity {
     }
 
     private void handleImport(Uri uri) {
+        if (!isLoggedIn()) {
+            showMemberLogin();
+            return;
+        }
         resetContent();
         addHeading("讀取文件中");
         TextView progress = addBody("正在讀取文件...");
@@ -489,10 +656,15 @@ public class MainActivity extends Activity {
 
                 for (int i = 0; i < words.size(); i++) {
                     String item = words.get(i);
-                    WordRepository.ImportWordStatus status = repository.enrichImportedWord(item, document.displayName);
-                    if (status == WordRepository.ImportWordStatus.SUCCESS) summary.success++;
-                    else if (status == WordRepository.ImportWordStatus.PARTIAL) summary.partial++;
-                    else summary.failed++;
+                    try {
+                        WordEntry entry = wordApiClient.addBookWord(authToken, item, "import", document.displayName);
+                        String normalized = normalizeWord(entry.word);
+                        if (!normalized.isEmpty()) cloudFavoriteWords.add(normalized);
+                        if (entry.partial) summary.partial++;
+                        else summary.success++;
+                    } catch (Exception error) {
+                        summary.failed++;
+                    }
 
                     if (i % 5 == 0 || i == words.size() - 1) {
                         int done = i + 1;
@@ -532,7 +704,7 @@ public class MainActivity extends Activity {
         addField("成功補齊", String.valueOf(summary.success));
         addField("部分補齊", String.valueOf(summary.partial));
         addField("需補查資料", String.valueOf(summary.failed));
-        addBody("匯入的單字已加入收藏頁，可以直接查看與複習。");
+        addBody("匯入的單字已加入雲端收藏頁，可以登入後在任何裝置同步查看。");
         content.addView(primaryButton("查看收藏", R.drawable.ic_book, v -> showBook()), fullWidth());
     }
 
@@ -769,6 +941,7 @@ public class MainActivity extends Activity {
         ImageButton favorite = roundIconButton(R.drawable.ic_heart, "加入收藏", 0xFFE83E65, 0xFFE83E65, null);
         updateFavoriteButton(favorite, entry);
         favorite.setOnClickListener(v -> toggleFavorite(entry, favorite));
+        refreshFavoriteState(entry, favorite);
         LinearLayout.LayoutParams favoriteParams = new LinearLayout.LayoutParams(dp(42), dp(42));
         top.addView(favorite, favoriteParams);
         card.addView(top, fullWidthNoMargin());
@@ -812,33 +985,30 @@ public class MainActivity extends Activity {
 
     private void toggleFavorite(WordEntry entry, ImageButton favoriteButton) {
         if (entry == null || isBlank(entry.word)) return;
-        UserWord userWord = database.getUserWord(entry.word);
-        if (userWord == null || !userWord.favorite) {
-            repository.addToBook(entry, "manual", "手動搜尋");
-            Toast.makeText(this, "已加入收藏。", Toast.LENGTH_SHORT).show();
-            updateFavoriteButton(favoriteButton, entry);
+        if (!isLoggedIn()) {
+            showMemberLogin();
             return;
         }
 
-        database.removeUserWord(entry.word);
-        Toast.makeText(this, "已取消收藏。", Toast.LENGTH_SHORT).show();
-        if (hasBookSwipeContext() && isCurrentBookWord(entry.word)) {
-            bookSwipeEntries.remove(bookSwipeIndex);
-            if (bookSwipeEntries.isEmpty()) {
-                showBook();
-                return;
-            }
-            if (bookSwipeIndex >= bookSwipeEntries.size()) bookSwipeIndex = bookSwipeEntries.size() - 1;
-            renderWordDetail(bookSwipeEntries.get(bookSwipeIndex));
+        if (isCloudFavorite(entry.word) || entry.favorite) {
+            removeCloudFavorite(entry, favoriteButton);
             return;
         }
-        updateFavoriteButton(favoriteButton, entry);
+
+        runBackground(
+                () -> wordApiClient.addBookWord(authToken, entry.word, "manual", "手動搜尋"),
+                savedEntry -> {
+                    String normalized = normalizeWord(savedEntry.word);
+                    if (!normalized.isEmpty()) cloudFavoriteWords.add(normalized);
+                    entry.favorite = true;
+                    entry.familiarity = savedEntry.familiarity;
+                    Toast.makeText(this, "已加入雲端收藏。", Toast.LENGTH_SHORT).show();
+                    updateFavoriteButton(favoriteButton, entry);
+                });
     }
 
     private void updateFavoriteButton(ImageButton button, WordEntry entry) {
-        boolean favorite = entry != null
-                && !isBlank(entry.word)
-                && database.getUserWord(entry.word) != null;
+        boolean favorite = entry != null && (entry.favorite || isCloudFavorite(entry.word));
         if (favorite) {
             button.setImageResource(R.drawable.ic_heart);
             button.setContentDescription("取消收藏");
@@ -850,6 +1020,22 @@ public class MainActivity extends Activity {
             button.setBackground(makeBg(0xFFF1F3F5, 0xFFE5E7EB, 8));
             button.setColorFilter(COLOR_MUTED);
         }
+    }
+
+    private void refreshFavoriteState(WordEntry entry, ImageButton button) {
+        if (!isLoggedIn() || entry == null || isBlank(entry.word)) return;
+        runBackground(
+                () -> wordApiClient.isBookWord(authToken, entry.word),
+                favorite -> {
+                    String normalized = normalizeWord(entry.word);
+                    if (favorite) {
+                        cloudFavoriteWords.add(normalized);
+                    } else {
+                        cloudFavoriteWords.remove(normalized);
+                    }
+                    entry.favorite = favorite;
+                    updateFavoriteButton(button, entry);
+                });
     }
 
     private void addMeaningRows(LinearLayout parent, WordEntry entry) {
@@ -1269,6 +1455,19 @@ public class MainActivity extends Activity {
 
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    private String safeString(String value) {
+        return value == null ? "" : value;
+    }
+
+    private String normalizeWord(String word) {
+        return WordNormalizer.normalizeQuery(word);
+    }
+
+    private boolean isCloudFavorite(String word) {
+        String normalized = normalizeWord(word);
+        return !normalized.isEmpty() && cloudFavoriteWords.contains(normalized);
     }
 
     private LinearLayout.LayoutParams fullWidth() {

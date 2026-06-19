@@ -3,14 +3,11 @@ package com.teemocaption.enlearning.data;
 import com.teemocaption.enlearning.net.WordApiClient;
 import com.teemocaption.enlearning.util.WordNormalizer;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 public class WordRepository {
     private final AppDatabase database;
     private final WordApiClient lookupService;
-    private final Map<String, WordEntry> inMemoryResults = new HashMap<>();
 
     public WordRepository(AppDatabase database, WordApiClient lookupService) {
         this.database = database;
@@ -21,11 +18,6 @@ public class WordRepository {
         List<String> candidates = WordNormalizer.lookupCandidates(rawWord);
         if (candidates.isEmpty()) return createPending(rawWord, "請輸入英文單字");
         String word = candidates.get(0);
-        if (inMemoryResults.containsKey(word)) {
-            WordEntry cached = inMemoryResults.get(word);
-            cached.fromCache = true;
-            return cached;
-        }
 
         Exception lastError = null;
         for (String candidate : candidates) {
@@ -35,22 +27,10 @@ public class WordRepository {
                 if (entry.word.isEmpty()) entry.word = candidate;
                 entry.originalWord = word;
                 entry.fromCache = false;
-                database.upsertWord(entry);
                 database.addRecentSearch(entry.word);
-                database.removePendingWord(entry.word);
-                inMemoryResults.put(word, entry);
                 return entry;
             } catch (Exception networkError) {
                 lastError = networkError;
-            }
-        }
-
-        for (String candidate : candidates) {
-            WordEntry cached = database.getWord(candidate);
-            if (cached != null && cached.hasDisplayableData()) {
-                cached.fromCache = true;
-                database.addRecentSearch(candidate);
-                return cached;
             }
         }
 
@@ -70,10 +50,7 @@ public class WordRepository {
     }
 
     public void addToBook(String word, String sourceType, String sourceName) {
-        String normalized = WordNormalizer.normalizeQuery(word);
-        if (!normalized.isEmpty()) {
-            database.addUserWord(normalized, sourceType, sourceName);
-        }
+        // 收藏已改由雲端會員單字本管理，這裡保留方法避免舊呼叫點誤寫本機收藏。
     }
 
     public ImportWordStatus enrichImportedWord(String rawWord, String sourceName) {
@@ -81,16 +58,13 @@ public class WordRepository {
         if (word.isEmpty()) return ImportWordStatus.FAILED;
         try {
             WordEntry entry = lookupNetworkFirst(rawWord);
-            addToBook(entry.word, "import", sourceName);
             if (entry.partial) {
                 database.addPendingWord(entry.word, "部分欄位尚未補齊");
                 return ImportWordStatus.PARTIAL;
             }
             return ImportWordStatus.SUCCESS;
         } catch (Exception error) {
-            WordEntry pending = createPending(word, error.getMessage());
-            database.upsertWord(pending);
-            database.addUserWord(word, "import", sourceName);
+            createPending(word, error.getMessage());
             return ImportWordStatus.FAILED;
         }
     }
@@ -108,7 +82,6 @@ public class WordRepository {
         pending.source = "待補清單";
         pending.partial = true;
         pending.fromCache = true;
-        database.upsertWord(pending);
         database.addPendingWord(word, reason == null ? "待補資料" : reason);
         return pending;
     }

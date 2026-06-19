@@ -1,6 +1,7 @@
 package com.teemocaption.enlearning.net;
 
 import com.teemocaption.enlearning.BuildConfig;
+import com.teemocaption.enlearning.data.AuthSession;
 import com.teemocaption.enlearning.data.WordEntry;
 
 import org.json.JSONArray;
@@ -11,6 +12,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
@@ -24,11 +26,92 @@ public class WordApiClient {
     private static final String GOOGLE_TRANSLATE_SOURCE = "google_cloud_translation";
 
     public WordEntry lookup(String word) throws IOException, JSONException {
-        String baseUrl = BuildConfig.WORD_API_BASE_URL == null ? "" : BuildConfig.WORD_API_BASE_URL.trim();
+        String baseUrl = configuredBaseUrl();
         if (!baseUrl.isEmpty()) {
             return lookupFromBackend(baseUrl, word);
         }
         return lookupFromPublicApis(word);
+    }
+
+    public AuthSession register(String email, String password) throws IOException, JSONException {
+        return authenticate("auth/register", email, password);
+    }
+
+    public AuthSession login(String email, String password) throws IOException, JSONException {
+        return authenticate("auth/login", email, password);
+    }
+
+    public List<WordEntry> getBook(String token) throws IOException, JSONException {
+        JSONObject object = new JSONObject(request("GET", backendUrl("book"), null, token));
+        if (!object.optBoolean("ok", false)) throwBackendError(object);
+        JSONArray entries = object.optJSONArray("entries");
+        List<WordEntry> words = new ArrayList<>();
+        if (entries == null) return words;
+        for (int i = 0; i < entries.length(); i++) {
+            JSONObject item = entries.optJSONObject(i);
+            if (item == null) continue;
+            WordEntry entry = readUnifiedWord(item, item.optString("word", ""));
+            entry.favorite = item.optBoolean("favorite", true);
+            entry.familiarity = item.optInt("familiarity", 0);
+            words.add(entry);
+        }
+        return words;
+    }
+
+    public boolean isBookWord(String token, String word) throws IOException, JSONException {
+        JSONObject object = new JSONObject(request("GET",
+                backendUrl("book/contains?word=" + encode(word)), null, token));
+        if (!object.optBoolean("ok", false)) throwBackendError(object);
+        return object.optBoolean("favorite", false);
+    }
+
+    public WordEntry addBookWord(String token, String word, String sourceType, String sourceName)
+            throws IOException, JSONException {
+        JSONObject body = new JSONObject();
+        body.put("word", word);
+        body.put("sourceType", sourceType);
+        body.put("sourceName", sourceName);
+        JSONObject object = new JSONObject(request("POST", backendUrl("book"), body.toString(), token));
+        if (!object.optBoolean("ok", false)) throwBackendError(object);
+        JSONObject item = object.optJSONObject("item");
+        if (item == null) throw new IOException("Backend did not return a book item.");
+        WordEntry entry = readUnifiedWord(item, word);
+        entry.favorite = item.optBoolean("favorite", true);
+        entry.familiarity = item.optInt("familiarity", 0);
+        return entry;
+    }
+
+    public void removeBookWord(String token, String word) throws IOException, JSONException {
+        JSONObject object = new JSONObject(request("DELETE",
+                backendUrl("book?word=" + encode(word)), null, token));
+        if (!object.optBoolean("ok", false)) throwBackendError(object);
+    }
+
+    public int updateBookFamiliarity(String token, String word, int familiarity)
+            throws IOException, JSONException {
+        JSONObject body = new JSONObject();
+        body.put("word", word);
+        body.put("familiarity", familiarity);
+        JSONObject object = new JSONObject(request("POST",
+                backendUrl("book/familiarity"), body.toString(), token));
+        if (!object.optBoolean("ok", false)) throwBackendError(object);
+        return object.optInt("familiarity", familiarity);
+    }
+
+    private AuthSession authenticate(String path, String email, String password)
+            throws IOException, JSONException {
+        JSONObject body = new JSONObject();
+        body.put("email", email);
+        body.put("password", password);
+        JSONObject object = new JSONObject(request("POST", backendUrl(path), body.toString(), null));
+        if (!object.optBoolean("ok", false)) throwBackendError(object);
+        JSONObject user = object.optJSONObject("user");
+        AuthSession session = new AuthSession();
+        session.token = object.optString("token", "");
+        session.email = user == null ? email : user.optString("email", email);
+        session.expiresAt = object.optString("expiresAt", "");
+        if (session.token.trim().isEmpty()) throw new IOException("Backend did not return an auth token.");
+        return session;
     }
 
     private WordEntry lookupFromBackend(String baseUrl, String word) throws IOException, JSONException {
@@ -252,20 +335,54 @@ public class WordApiClient {
         return values;
     }
 
+    private static String configuredBaseUrl() {
+        return BuildConfig.WORD_API_BASE_URL == null ? "" : BuildConfig.WORD_API_BASE_URL.trim();
+    }
+
+    private static String backendUrl(String path) throws IOException {
+        String baseUrl = configuredBaseUrl();
+        if (baseUrl.isEmpty()) throw new IOException("尚未設定後端服務網址。");
+        String separator = baseUrl.endsWith("/") ? "" : "/";
+        return baseUrl + separator + path;
+    }
+
     private static String get(String url) throws IOException {
+        return request("GET", url, null, null);
+    }
+
+    private static String request(String method, String url, String body, String token) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);
-        connection.setRequestMethod("GET");
+        connection.setRequestMethod(method);
         connection.setRequestProperty("Accept", "application/json");
+        if (token != null && !token.trim().isEmpty()) {
+            connection.setRequestProperty("Authorization", "Bearer " + token.trim());
+        }
+        if (body != null) {
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            connection.setFixedLengthStreamingMode(bytes.length);
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(bytes);
+            }
+        }
         int code = connection.getResponseCode();
         InputStream stream = code >= 200 && code < 300
                 ? connection.getInputStream()
                 : connection.getErrorStream();
-        String body = readStream(stream);
+        String responseBody = readStream(stream);
         connection.disconnect();
-        if (code < 200 || code >= 300) throw new IOException("HTTP " + code + ": " + body);
-        return body;
+        if (code < 200 || code >= 300) throw new IOException("HTTP " + code + ": " + responseBody);
+        return responseBody;
+    }
+
+    private static void throwBackendError(JSONObject object) throws IOException {
+        JSONObject error = object.optJSONObject("error");
+        String message = error == null ? object.optString("message", "Backend request failed.")
+                : error.optString("message", "Backend request failed.");
+        throw new IOException(message);
     }
 
     private static String readStream(InputStream stream) throws IOException {

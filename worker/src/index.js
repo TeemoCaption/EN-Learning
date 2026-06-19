@@ -6,6 +6,8 @@ const DEFAULT_BATCH_LIMIT = 50;
 const DEFAULT_GOOGLE_TRANSLATE_MONTHLY_LIMIT = 450000;
 const DEFAULT_EXAMPLE_TRANSLATION_LIMIT = 3;
 const REQUEST_TIMEOUT_MS = 7000;
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
+const PASSWORD_HASH_ITERATIONS = 100000;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -41,6 +43,49 @@ export default {
         });
       }
 
+      if (request.method === "POST" && url.pathname === "/auth/register") {
+        return jsonResponse(await handleRegister(request, env));
+      }
+
+      if (request.method === "POST" && url.pathname === "/auth/login") {
+        return jsonResponse(await handleLogin(request, env));
+      }
+
+      if (request.method === "GET" && url.pathname === "/auth/me") {
+        const user = await requireUser(request, env);
+        return jsonResponse({
+          ok: true,
+          user: publicUser(user),
+        });
+      }
+
+      if (request.method === "GET" && url.pathname === "/book") {
+        const user = await requireUser(request, env);
+        return jsonResponse(await handleBookList(user, env));
+      }
+
+      if (request.method === "GET" && url.pathname === "/book/contains") {
+        const user = await requireUser(request, env);
+        const word = url.searchParams.get("word");
+        return jsonResponse(await handleBookContains(user, word, env));
+      }
+
+      if (request.method === "POST" && url.pathname === "/book") {
+        const user = await requireUser(request, env);
+        return jsonResponse(await handleBookAdd(request, user, env));
+      }
+
+      if (request.method === "POST" && url.pathname === "/book/familiarity") {
+        const user = await requireUser(request, env);
+        return jsonResponse(await handleBookFamiliarity(request, user, env));
+      }
+
+      if (request.method === "DELETE" && url.pathname === "/book") {
+        const user = await requireUser(request, env);
+        const word = url.searchParams.get("word");
+        return jsonResponse(await handleBookRemove(user, word, env));
+      }
+
       if (request.method === "GET" && url.pathname === "/word") {
         const term = url.searchParams.get("term");
         const refresh = isTruthy(url.searchParams.get("refresh"));
@@ -67,19 +112,369 @@ export default {
         404,
       );
     } catch (error) {
+      const status = Number.isInteger(error?.status) ? error.status : 500;
       return jsonResponse(
         {
           ok: false,
           error: {
-            code: "internal_error",
+            code: error?.code ?? "internal_error",
             message: error instanceof Error ? error.message : "Unknown error.",
           },
         },
-        500,
+        status,
       );
     }
   },
 };
+
+async function handleRegister(request, env) {
+  ensureDatabase(env);
+  const body = await readJson(request);
+  const email = normalizeEmail(body?.email);
+  const password = String(body?.password ?? "");
+  validateEmailAndPassword(email, password);
+
+  const existing = await env.DB
+    .prepare(`SELECT id FROM users WHERE email = ? LIMIT 1`)
+    .bind(email)
+    .first();
+  if (existing) {
+    throw httpError(409, "email_exists", "這個信箱已經註冊。");
+  }
+
+  const now = new Date().toISOString();
+  const user = {
+    id: randomHex(16),
+    email,
+    created_at: now,
+  };
+  const passwordSalt = randomHex(16);
+  const passwordHash = await hashPassword(password, passwordSalt);
+
+  await env.DB
+    .prepare(
+      `INSERT INTO users (id, email, password_hash, password_salt, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .bind(user.id, user.email, passwordHash, passwordSalt, now)
+    .run();
+
+  const session = await createSession(env.DB, user.id);
+  return {
+    ok: true,
+    user: publicUser(user),
+    token: session.token,
+    expiresAt: session.expiresAt,
+  };
+}
+
+async function handleLogin(request, env) {
+  ensureDatabase(env);
+  const body = await readJson(request);
+  const email = normalizeEmail(body?.email);
+  const password = String(body?.password ?? "");
+  if (!email || !password) {
+    throw httpError(400, "invalid_credentials", "請輸入信箱與密碼。");
+  }
+
+  const user = await env.DB
+    .prepare(
+      `SELECT id, email, password_hash, password_salt, created_at
+       FROM users
+       WHERE email = ?
+       LIMIT 1`,
+    )
+    .bind(email)
+    .first();
+  if (!user) {
+    throw httpError(401, "invalid_credentials", "信箱或密碼不正確。");
+  }
+
+  const expectedHash = await hashPassword(password, user.password_salt);
+  if (expectedHash !== user.password_hash) {
+    throw httpError(401, "invalid_credentials", "信箱或密碼不正確。");
+  }
+
+  const session = await createSession(env.DB, user.id);
+  return {
+    ok: true,
+    user: publicUser(user),
+    token: session.token,
+    expiresAt: session.expiresAt,
+  };
+}
+
+async function handleBookList(user, env) {
+  const rows = await env.DB
+    .prepare(
+      `SELECT word, familiarity, favorite, source_type, source_name, added_at, review_count
+       FROM cloud_user_words
+       WHERE user_id = ? AND favorite = 1
+       ORDER BY added_at DESC`,
+    )
+    .bind(user.id)
+    .all();
+
+  const entries = [];
+  for (const row of rows.results ?? []) {
+    entries.push(await buildBookItem(row, env));
+  }
+
+  return {
+    ok: true,
+    user: publicUser(user),
+    entries,
+  };
+}
+
+async function handleBookContains(user, rawWord, env) {
+  const validation = validateTerm(rawWord);
+  if (!validation.ok) {
+    return {
+      ok: true,
+      word: rawWord ?? "",
+      favorite: false,
+    };
+  }
+  const row = await readCloudUserWord(env.DB, user.id, validation.term);
+  return {
+    ok: true,
+    word: validation.term,
+    favorite: Boolean(row?.favorite),
+    familiarity: row?.familiarity ?? 0,
+  };
+}
+
+async function handleBookAdd(request, user, env) {
+  const body = await readJson(request);
+  const validation = validateTerm(body?.word);
+  if (!validation.ok) {
+    throw httpError(400, "invalid_word", validation.reason);
+  }
+
+  const payload = await lookupWord(validation.term, env);
+  const word = validateTerm(payload?.entry?.word).ok
+    ? validateTerm(payload.entry.word).term
+    : validation.term;
+  const now = new Date().toISOString();
+  const sourceType = cleanSmallText(body?.sourceType, "manual");
+  const sourceName = cleanSmallText(body?.sourceName, "");
+  const existing = await readCloudUserWord(env.DB, user.id, word);
+
+  await env.DB
+    .prepare(
+      `INSERT INTO cloud_user_words
+         (user_id, word, familiarity, favorite, source_type, source_name, added_at, review_count)
+       VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+       ON CONFLICT(user_id, word) DO UPDATE SET
+         favorite = 1,
+         source_type = excluded.source_type,
+         source_name = excluded.source_name,
+         added_at = COALESCE(cloud_user_words.added_at, excluded.added_at),
+         familiarity = cloud_user_words.familiarity,
+         review_count = cloud_user_words.review_count`,
+    )
+    .bind(
+      user.id,
+      word,
+      existing?.familiarity ?? 0,
+      sourceType,
+      sourceName,
+      existing?.added_at ?? now,
+      existing?.review_count ?? 0,
+    )
+    .run();
+
+  const row = await readCloudUserWord(env.DB, user.id, word);
+  return {
+    ok: true,
+    item: await buildBookItem(row, env, payload),
+  };
+}
+
+async function handleBookFamiliarity(request, user, env) {
+  const body = await readJson(request);
+  const validation = validateTerm(body?.word);
+  if (!validation.ok) {
+    throw httpError(400, "invalid_word", validation.reason);
+  }
+  const familiarity = Math.max(0, Math.min(5, Number.parseInt(body?.familiarity ?? "0", 10) || 0));
+  const row = await readCloudUserWord(env.DB, user.id, validation.term);
+  if (!row) {
+    throw httpError(404, "not_in_book", "這個單字尚未加入收藏。");
+  }
+
+  await env.DB
+    .prepare(
+      `UPDATE cloud_user_words
+       SET familiarity = ?
+       WHERE user_id = ? AND word = ?`,
+    )
+    .bind(familiarity, user.id, validation.term)
+    .run();
+
+  return {
+    ok: true,
+    word: validation.term,
+    familiarity,
+  };
+}
+
+async function handleBookRemove(user, rawWord, env) {
+  const validation = validateTerm(rawWord);
+  if (!validation.ok) {
+    throw httpError(400, "invalid_word", validation.reason);
+  }
+
+  await env.DB
+    .prepare(`DELETE FROM cloud_user_words WHERE user_id = ? AND word = ?`)
+    .bind(user.id, validation.term)
+    .run();
+
+  return {
+    ok: true,
+    word: validation.term,
+    favorite: false,
+  };
+}
+
+async function buildBookItem(row, env, existingPayload = null) {
+  const payload = existingPayload ?? await lookupWord(row.word, env);
+  return {
+    ...payload,
+    favorite: Boolean(row.favorite),
+    familiarity: row.familiarity ?? 0,
+    sourceType: row.source_type ?? "",
+    sourceName: row.source_name ?? "",
+    addedAt: row.added_at ?? "",
+  };
+}
+
+async function readCloudUserWord(db, userId, word) {
+  return await db
+    .prepare(
+      `SELECT word, familiarity, favorite, source_type, source_name, added_at, review_count
+       FROM cloud_user_words
+       WHERE user_id = ? AND word = ?
+       LIMIT 1`,
+    )
+    .bind(userId, word)
+    .first();
+}
+
+async function requireUser(request, env) {
+  ensureDatabase(env);
+  const authorization = request.headers.get("Authorization") ?? "";
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    throw httpError(401, "missing_token", "請先登入會員。");
+  }
+
+  const tokenHash = await sha256Hex(match[1].trim());
+  const now = new Date().toISOString();
+  const session = await env.DB
+    .prepare(
+      `SELECT s.user_id, u.id, u.email, u.created_at
+       FROM auth_sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.token_hash = ? AND s.expires_at > ?
+       LIMIT 1`,
+    )
+    .bind(tokenHash, now)
+    .first();
+  if (!session) {
+    throw httpError(401, "invalid_token", "登入狀態已失效，請重新登入。");
+  }
+
+  return {
+    id: session.id,
+    email: session.email,
+    created_at: session.created_at,
+  };
+}
+
+async function createSession(db, userId) {
+  const token = randomHex(32);
+  const tokenHash = await sha256Hex(token);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + SESSION_TTL_SECONDS * 1000).toISOString();
+  await db
+    .prepare(
+      `INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at)
+       VALUES (?, ?, ?, ?)`,
+    )
+    .bind(tokenHash, userId, now.toISOString(), expiresAt)
+    .run();
+  return { token, expiresAt };
+}
+
+async function hashPassword(password, salt) {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt: encoder.encode(salt),
+      iterations: PASSWORD_HASH_ITERATIONS,
+      hash: "SHA-256",
+    },
+    keyMaterial,
+    256,
+  );
+  return toHex(bits);
+}
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(String(value)),
+  );
+  return toHex(digest);
+}
+
+function randomHex(byteLength) {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function normalizeEmail(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function validateEmailAndPassword(email, password) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw httpError(400, "invalid_email", "請輸入有效的信箱。");
+  }
+  if (password.length < 8 || password.length > 72) {
+    throw httpError(400, "invalid_password", "密碼長度需為 8 到 72 個字元。");
+  }
+}
+
+function publicUser(user) {
+  return {
+    id: user.id,
+    email: user.email,
+    createdAt: user.created_at,
+  };
+}
+
+function cleanSmallText(value, fallback) {
+  const text = String(value ?? "").trim();
+  return text ? text.slice(0, 120) : fallback;
+}
+
+function ensureDatabase(env) {
+  if (!env.DB) {
+    throw httpError(503, "database_unavailable", "雲端資料庫尚未設定。");
+  }
+}
 
 async function lookupBatch(rawTerms, env, options) {
   const limit = getNumber(env.BATCH_LIMIT, DEFAULT_BATCH_LIMIT);
@@ -921,4 +1316,11 @@ function decodeHtmlEntities(value) {
 
 function isTruthy(value) {
   return value === "1" || value === "true" || value === "yes";
+}
+
+function httpError(status, code, message) {
+  const error = new Error(message);
+  error.status = status;
+  error.code = code;
+  return error;
 }

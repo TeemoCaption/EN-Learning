@@ -19,6 +19,8 @@ public class WordEntry {
     public long updatedAt;
     public boolean fromCache;
     public boolean partial;
+    public boolean favorite;
+    public int familiarity;
 
     public WordEntry(String word) {
         this.word = word == null ? "" : word;

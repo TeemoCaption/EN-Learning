@@ -45,3 +45,36 @@ CREATE TABLE IF NOT EXISTS translation_usage (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (source, usage_month)
 );
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  password_salt TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id
+  ON auth_sessions (user_id);
+
+CREATE TABLE IF NOT EXISTS cloud_user_words (
+  user_id TEXT NOT NULL,
+  word TEXT NOT NULL,
+  familiarity INTEGER NOT NULL DEFAULT 0,
+  favorite INTEGER NOT NULL DEFAULT 1,
+  source_type TEXT,
+  source_name TEXT,
+  added_at TEXT NOT NULL,
+  review_count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, word)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cloud_user_words_user_added
+  ON cloud_user_words (user_id, added_at DESC);

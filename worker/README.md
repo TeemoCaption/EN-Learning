@@ -7,6 +7,12 @@
 - `GET /word?term=expand`：查詢單字。
 - `GET /translation-usage`：查看本月 Google 翻譯字元用量。
 - `POST /batch-words`：批次查詢單字，給文件匯入後補資料使用。
+- `POST /auth/register`：會員註冊，使用信箱與密碼。
+- `POST /auth/login`：會員登入，回傳會員令牌。
+- `GET /book`：讀取登入會員的雲端收藏單字。
+- `POST /book`：把單字加入登入會員的雲端收藏。
+- `DELETE /book?word=expand`：從登入會員的雲端收藏移除單字。
+- `POST /book/familiarity`：更新登入會員收藏單字的熟悉度。
 - 整合 Free Dictionary API，補英文定義、例句與音標。
 - 整合 Google Cloud Translation API，補中文意思與最多前三句例句中文翻譯。
 - 使用 D1 快取 Google 翻譯結果；同一個單字或同一句例句翻譯過後，不會重複呼叫 Google。
@@ -14,6 +20,7 @@
 - 英文例句仍由線上辭典來源提供；Google Cloud Translation API 負責把英文例句翻成繁體中文，不負責產生新的英文例句。
 - 預留 D1 的 `ecdict_words` 表，之後可匯入 ECDICT，提供中文意思與音標備援。
 - 中文意思主要使用 Google 官方翻譯；若 Google 未設定或已達保護上限，才會使用 ECDICT 作為備援。
+- 會員收藏單字存放在 D1 的 `cloud_user_words`；安卓端不再用手機本機資料庫保存收藏快取。
 
 ## 回傳格式
 
@@ -141,6 +148,25 @@ Invoke-RestMethod "https://en-learning-dictionary.<你的帳號>.workers.dev/tra
 Invoke-RestMethod "https://en-learning-dictionary.<你的帳號>.workers.dev/word?term=expand"
 ```
 
+會員 API 範例：
+
+```powershell
+$session = Invoke-RestMethod "https://en-learning-dictionary.<你的帳號>.workers.dev/auth/register" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"email":"you@example.com","password":"your-password"}'
+
+$headers = @{ Authorization = "Bearer $($session.token)" }
+
+Invoke-RestMethod "https://en-learning-dictionary.<你的帳號>.workers.dev/book" -Headers $headers
+
+Invoke-RestMethod "https://en-learning-dictionary.<你的帳號>.workers.dev/book" `
+  -Method Post `
+  -Headers $headers `
+  -ContentType "application/json" `
+  -Body '{"word":"expand","sourceType":"manual","sourceName":"手動搜尋"}'
+```
+
 ## ECDICT 匯入設計
 
 第一版先預留 D1 表：
@@ -164,9 +190,10 @@ ecdict_words(word, phonetic, translation, definition, pos, exchange)
 
 - 手動搜尋：呼叫 `GET /word?term=...`。
 - 使用者按下重新整理：呼叫 `GET /word?term=...&refresh=1`。
-- 文件匯入後：安卓端先抽出英文單字並去重，再每批最多 50 個送到 `POST /batch-words`。
+- 文件匯入後：安卓端先抽出英文單字並去重，再逐字送到 `POST /book`，由後端補資料並加入會員雲端收藏。
 - 安卓端不要上傳原始文件，只上傳單字清單。
-- 若 `status` 是 `partial` 或 `pending`，仍可加入單字本，並在待補資料頁提供重新查詢。
+- 若 `status` 是 `partial` 或 `pending`，仍可加入會員雲端收藏，並在待補資料頁提供重新查詢。
+- 安卓端只保存登入令牌與搜尋紀錄；收藏單字來源以 `GET /book` 的雲端資料為準，不保存手機本機收藏快取。
 
 建置安卓 APP 時可以用環境變數或 Gradle 參數指定 Worker 網址：
 

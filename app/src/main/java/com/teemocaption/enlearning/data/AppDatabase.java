@@ -11,7 +11,7 @@ import java.util.List;
 
 public class AppDatabase extends SQLiteOpenHelper {
     private static final String DB_NAME = "en_learning.db";
-    private static final int DB_VERSION = 3;
+    private static final int DB_VERSION = 4;
 
     public AppDatabase(Context context) {
         super(context, DB_NAME, null, DB_VERSION);
@@ -72,6 +72,11 @@ public class AppDatabase extends SQLiteOpenHelper {
         }
         if (oldVersion < 3) {
             db.execSQL("UPDATE word_entries SET synonyms = '', related_words = ''");
+        }
+        if (oldVersion < 4) {
+            db.execSQL("DELETE FROM word_entries");
+            db.execSQL("DELETE FROM user_words");
+            db.execSQL("DELETE FROM pending_words");
             return;
         }
         db.execSQL("DROP TABLE IF EXISTS word_entries");
