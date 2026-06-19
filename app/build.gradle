@@ -2,6 +2,11 @@ plugins {
     id "com.android.application"
 }
 
+def configuredWordApiBaseUrl = project.findProperty("WORD_API_BASE_URL") ?: System.getenv("WORD_API_BASE_URL") ?: ""
+def escapedWordApiBaseUrl = configuredWordApiBaseUrl
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+
 android {
     namespace "com.teemocaption.enlearning"
     compileSdk 35
@@ -17,7 +22,7 @@ android {
         versionCode 1
         versionName "0.1.0"
 
-        buildConfigField "String", "WORD_API_BASE_URL", "\"\""
+        buildConfigField "String", "WORD_API_BASE_URL", "\"${escapedWordApiBaseUrl}\""
     }
 
     compileOptions {

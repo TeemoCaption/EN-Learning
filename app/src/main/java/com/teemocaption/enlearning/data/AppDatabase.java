@@ -11,7 +11,7 @@ import java.util.List;
 
 public class AppDatabase extends SQLiteOpenHelper {
     private static final String DB_NAME = "en_learning.db";
-    private static final int DB_VERSION = 1;
+    private static final int DB_VERSION = 2;
 
     public AppDatabase(Context context) {
         super(context, DB_NAME, null, DB_VERSION);
@@ -27,6 +27,7 @@ public class AppDatabase extends SQLiteOpenHelper {
                 "part_of_speech TEXT, " +
                 "english_definition TEXT, " +
                 "examples TEXT, " +
+                "example_translations TEXT, " +
                 "synonyms TEXT, " +
                 "related_words TEXT, " +
                 "source TEXT, " +
@@ -66,6 +67,10 @@ public class AppDatabase extends SQLiteOpenHelper {
 
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE word_entries ADD COLUMN example_translations TEXT DEFAULT ''");
+            return;
+        }
         db.execSQL("DROP TABLE IF EXISTS word_entries");
         db.execSQL("DROP TABLE IF EXISTS user_words");
         db.execSQL("DROP TABLE IF EXISTS pending_words");
@@ -87,6 +92,7 @@ public class AppDatabase extends SQLiteOpenHelper {
         values.put("part_of_speech", entry.partOfSpeech);
         values.put("english_definition", entry.englishDefinition);
         values.put("examples", joinLines(entry.examples));
+        values.put("example_translations", joinLines(entry.exampleTranslations));
         values.put("synonyms", joinLines(entry.synonyms));
         values.put("related_words", joinLines(entry.relatedWords));
         values.put("source", entry.source);
@@ -260,6 +266,7 @@ public class AppDatabase extends SQLiteOpenHelper {
         entry.partOfSpeech = cursor.getString(cursor.getColumnIndexOrThrow("part_of_speech"));
         entry.englishDefinition = cursor.getString(cursor.getColumnIndexOrThrow("english_definition"));
         entry.examples = splitLines(cursor.getString(cursor.getColumnIndexOrThrow("examples")));
+        entry.exampleTranslations = splitLines(cursor.getString(cursor.getColumnIndexOrThrow("example_translations")));
         entry.synonyms = splitLines(cursor.getString(cursor.getColumnIndexOrThrow("synonyms")));
         entry.relatedWords = splitLines(cursor.getString(cursor.getColumnIndexOrThrow("related_words")));
         entry.source = cursor.getString(cursor.getColumnIndexOrThrow("source"));
@@ -277,6 +284,7 @@ public class AppDatabase extends SQLiteOpenHelper {
         merged.partOfSpeech = firstNonBlank(newEntry.partOfSpeech, oldEntry.partOfSpeech);
         merged.englishDefinition = firstNonBlank(newEntry.englishDefinition, oldEntry.englishDefinition);
         merged.examples = mergeLists(oldEntry.examples, newEntry.examples, 5);
+        merged.exampleTranslations = mergeLists(oldEntry.exampleTranslations, newEntry.exampleTranslations, 5);
         merged.synonyms = mergeLists(oldEntry.synonyms, newEntry.synonyms, 12);
         merged.relatedWords = mergeLists(oldEntry.relatedWords, newEntry.relatedWords, 12);
         merged.source = firstNonBlank(newEntry.source, oldEntry.source);

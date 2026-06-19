@@ -12,6 +12,7 @@ public class WordEntry {
     public String partOfSpeech;
     public String englishDefinition;
     public List<String> examples = new ArrayList<>();
+    public List<String> exampleTranslations = new ArrayList<>();
     public List<String> synonyms = new ArrayList<>();
     public List<String> relatedWords = new ArrayList<>();
     public String source;
@@ -30,6 +31,7 @@ public class WordEntry {
                 || notBlank(phonetic)
                 || notBlank(englishDefinition)
                 || !examples.isEmpty()
+                || !exampleTranslations.isEmpty()
                 || !synonyms.isEmpty()
                 || !relatedWords.isEmpty();
     }

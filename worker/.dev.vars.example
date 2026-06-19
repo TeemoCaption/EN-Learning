@@ -1,3 +1,11 @@
 # Optional. Datamuse can currently be used without a key, but the Worker
 # supports adding one later without changing Android code.
 DATAMUSE_API_KEY=
+
+# Optional, but required if you want Chinese meanings and example translations
+# to come from the official Google Cloud Translation API.
+# Keep the real value in worker/.dev.vars locally or in Cloudflare secrets.
+GOOGLE_TRANSLATE_API_KEY=
+
+# Safety cap below Google's monthly 500,000-character credit.
+GOOGLE_TRANSLATE_MONTHLY_LIMIT=450000

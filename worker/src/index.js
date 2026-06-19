@@ -1,7 +1,10 @@
 const FREE_DICTIONARY_BASE_URL = "https://api.dictionaryapi.dev/api/v2/entries/en";
 const DATAMUSE_BASE_URL = "https://api.datamuse.com/words";
+const GOOGLE_TRANSLATE_BASE_URL = "https://translation.googleapis.com/language/translate/v2";
+const GOOGLE_TRANSLATE_SOURCE = "google_cloud_translation";
 const DEFAULT_CACHE_TTL_SECONDS = 60 * 60 * 24 * 14;
 const DEFAULT_BATCH_LIMIT = 50;
+const DEFAULT_GOOGLE_TRANSLATE_MONTHLY_LIMIT = 450000;
 const REQUEST_TIMEOUT_MS = 7000;
 
 const CORS_HEADERS = {
@@ -24,6 +27,16 @@ export default {
           ok: true,
           service: "en-learning-dictionary",
           hasDatabase: Boolean(env.DB),
+          hasGoogleTranslate: Boolean(env.DB && env.GOOGLE_TRANSLATE_API_KEY),
+          googleTranslateMonthlyLimit: getGoogleTranslateMonthlyLimit(env),
+        });
+      }
+
+      if (request.method === "GET" && url.pathname === "/translation-usage") {
+        const usage = await readCurrentTranslationUsage(env.DB, env);
+        return jsonResponse({
+          ok: true,
+          usage,
         });
       }
 
@@ -149,16 +162,40 @@ async function lookupWord(rawTerm, env, options = {}) {
   const freeDictionary = settledValue(freeDictionaryResult);
   const synonyms = settledValue(synonymsResult) ?? [];
   const nearSynonyms = settledValue(nearSynonymsResult) ?? [];
+  const firstFreeEntry = Array.isArray(freeDictionary) ? freeDictionary[0] : null;
+  const definitions = extractDefinitions(firstFreeEntry);
   const errors = [
     settledError("free_dictionary", freeDictionaryResult),
     settledError("datamuse_synonyms", synonymsResult),
     settledError("datamuse_near_synonyms", nearSynonymsResult),
   ].filter(Boolean);
 
+  let googleTranslation = null;
+  const translationResult = await tryTranslateTextWithGoogle(term, env, "word");
+  if (translationResult.ok) {
+    googleTranslation = translationResult.translation;
+  } else if (translationResult.error) {
+    errors.push(translationResult.error);
+  }
+
+  const exampleTranslations = new Map();
+  const firstExample = definitions.find((item) => item.example)?.example ?? "";
+  if (firstExample) {
+    const exampleTranslationResult = await tryTranslateTextWithGoogle(firstExample, env, "example");
+    if (exampleTranslationResult.ok) {
+      exampleTranslations.set(firstExample, exampleTranslationResult.translation);
+    } else if (exampleTranslationResult.error) {
+      errors.push(exampleTranslationResult.error);
+    }
+  }
+
   const payload = buildWordPayload({
     term,
     ecdict,
     freeDictionary,
+    definitions,
+    googleTranslation,
+    exampleTranslations,
     synonyms,
     nearSynonyms,
     errors,
@@ -173,13 +210,38 @@ async function lookupWord(rawTerm, env, options = {}) {
   return payload;
 }
 
-function buildWordPayload({ term, ecdict, freeDictionary, synonyms, nearSynonyms, errors }) {
+async function tryTranslateTextWithGoogle(inputText, env, purpose) {
+  try {
+    return await translateTextWithGoogle(inputText, env, purpose);
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        source: GOOGLE_TRANSLATE_SOURCE,
+        message: error instanceof Error ? error.message : "Google 翻譯呼叫失敗。",
+      },
+    };
+  }
+}
+
+function buildWordPayload({
+  term,
+  ecdict,
+  freeDictionary,
+  definitions,
+  googleTranslation,
+  exampleTranslations,
+  synonyms,
+  nearSynonyms,
+  errors,
+}) {
   const firstFreeEntry = Array.isArray(freeDictionary) ? freeDictionary[0] : null;
-  const definitions = extractDefinitions(firstFreeEntry);
   const examples = definitions
     .filter((item) => item.example)
     .map((item) => ({
       text: item.example,
+      translation: exampleTranslations.get(item.example)?.text ?? "",
+      translationSource: exampleTranslations.get(item.example)?.source ?? "",
       source: item.source,
     }));
   const phonetics = extractPhonetics(firstFreeEntry);
@@ -188,14 +250,18 @@ function buildWordPayload({ term, ecdict, freeDictionary, synonyms, nearSynonyms
     ...splitPartsOfSpeech(ecdict?.pos),
     ...definitions.map((item) => item.partOfSpeech).filter(Boolean),
   ]);
-  const translations = ecdict?.translation
-    ? [
-        {
-          text: ecdict.translation,
-          source: "ecdict_d1",
-        },
-      ]
-    : [];
+  const translations = [];
+  if (googleTranslation?.text) {
+    translations.push({
+      text: googleTranslation.text,
+      source: googleTranslation.source,
+    });
+  } else if (ecdict?.translation) {
+    translations.push({
+      text: ecdict.translation,
+      source: "ecdict_d1_fallback",
+    });
+  }
   const englishDefinitions = [
     ...(ecdict?.definition
       ? [
@@ -259,13 +325,238 @@ function buildWordPayload({ term, ecdict, freeDictionary, synonyms, nearSynonyms
       synonyms: uniqueStrings(synonyms).slice(0, 20),
       nearSynonyms: uniqueStrings(nearSynonyms).slice(0, 20),
       source: {
-        translation: translations.length ? "ecdict_d1" : "pending",
+        translation: translations.length ? translations[0].source : "pending",
         definition: definitions.length ? "free_dictionary" : ecdict?.definition ? "ecdict_d1" : "pending",
         synonyms: synonyms.length ? "datamuse" : "pending",
         nearSynonyms: nearSynonyms.length ? "datamuse" : "pending",
       },
     },
   };
+}
+
+async function translateTextWithGoogle(inputText, env, purpose) {
+  if (!env.GOOGLE_TRANSLATE_API_KEY) {
+    return { ok: false };
+  }
+
+  if (!env.DB) {
+    return {
+      ok: false,
+      error: {
+        source: GOOGLE_TRANSLATE_SOURCE,
+        message: "Google 翻譯已設定金鑰，但缺少 D1，為避免無法控管用量所以略過。",
+      },
+    };
+  }
+
+  const text = String(inputText ?? "").trim();
+  if (!text) {
+    return { ok: false };
+  }
+
+  const cacheKey = await createTranslationCacheKey(purpose, text);
+  const cached = await readTranslationCache(env.DB, cacheKey, "zh-TW");
+  if (cached) {
+    return {
+      ok: true,
+      translation: {
+        text: cached.translated_text,
+        source: "google_cloud_translation_cache",
+      },
+    };
+  }
+
+  const characterCount = countCharacters(text);
+  const reservation = await reserveGoogleTranslationUsage(env.DB, env, characterCount);
+  if (!reservation.ok) {
+    return {
+      ok: false,
+      error: {
+        source: GOOGLE_TRANSLATE_SOURCE,
+        message: `本月 Google 翻譯用量已達保護上限 ${reservation.limit} 字元，已停止呼叫以避免扣款。`,
+      },
+    };
+  }
+
+  const response = await fetchWithTimeout(
+    `${GOOGLE_TRANSLATE_BASE_URL}?key=${encodeURIComponent(env.GOOGLE_TRANSLATE_API_KEY)}`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json; charset=utf-8",
+        "User-Agent": "EN-Learning-Worker/0.1",
+      },
+      body: JSON.stringify({
+        q: [text],
+        source: "en",
+        target: "zh-TW",
+        format: "text",
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Google Translation returned ${response.status}: ${body}`);
+  }
+
+  const data = await response.json();
+  const translatedText = data?.data?.translations?.[0]?.translatedText ?? "";
+  const decoded = decodeHtmlEntities(translatedText);
+  const cleaned = purpose === "word"
+    ? cleanChineseMeaning(decoded)
+    : cleanTranslatedSentence(decoded);
+  if (!cleaned || cleaned.toLowerCase() === text.toLowerCase()) {
+    return { ok: false };
+  }
+
+  await writeTranslationCache(env.DB, cacheKey, "zh-TW", text, cleaned, GOOGLE_TRANSLATE_SOURCE);
+
+  return {
+    ok: true,
+    translation: {
+      text: cleaned,
+      source: GOOGLE_TRANSLATE_SOURCE,
+      usage: {
+        month: reservation.month,
+        charactersReserved: characterCount,
+        charactersUsed: reservation.charactersUsed,
+        monthlyLimit: reservation.limit,
+      },
+    },
+  };
+}
+
+async function readTranslationCache(db, term, targetLanguage) {
+  if (!db) {
+    return null;
+  }
+
+  return await db
+    .prepare(
+      `SELECT translated_text, source, updated_at
+       FROM translation_cache
+       WHERE cache_key = ? AND target_language = ?
+       LIMIT 1`,
+    )
+    .bind(term, targetLanguage)
+    .first();
+}
+
+async function writeTranslationCache(db, cacheKey, targetLanguage, inputText, translatedText, source) {
+  if (!db) {
+    return;
+  }
+
+  await db
+    .prepare(
+      `INSERT INTO translation_cache (cache_key, target_language, input_text, translated_text, source, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(cache_key, target_language) DO UPDATE SET
+         input_text = excluded.input_text,
+         translated_text = excluded.translated_text,
+         source = excluded.source,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(cacheKey, targetLanguage, inputText, translatedText, source, new Date().toISOString())
+    .run();
+}
+
+async function reserveGoogleTranslationUsage(db, env, characterCount) {
+  const limit = getGoogleTranslateMonthlyLimit(env);
+  const month = currentUsageMonth();
+  const now = new Date().toISOString();
+
+  if (characterCount <= 0 || characterCount > limit) {
+    const current = await readTranslationUsage(db, GOOGLE_TRANSLATE_SOURCE, month);
+    return {
+      ok: false,
+      month,
+      limit,
+      charactersUsed: current.characters_used ?? 0,
+    };
+  }
+
+  const reserved = await db
+    .prepare(
+      `INSERT INTO translation_usage (source, usage_month, characters_used, request_count, updated_at)
+       VALUES (?, ?, ?, 1, ?)
+       ON CONFLICT(source, usage_month) DO UPDATE SET
+         characters_used = characters_used + excluded.characters_used,
+         request_count = request_count + 1,
+         updated_at = excluded.updated_at
+       WHERE characters_used + excluded.characters_used <= ?
+       RETURNING characters_used, request_count`,
+    )
+    .bind(GOOGLE_TRANSLATE_SOURCE, month, characterCount, now, limit)
+    .first();
+
+  if (!reserved) {
+    const current = await readTranslationUsage(db, GOOGLE_TRANSLATE_SOURCE, month);
+    return {
+      ok: false,
+      month,
+      limit,
+      charactersUsed: current.characters_used ?? 0,
+      requestCount: current.request_count ?? 0,
+    };
+  }
+
+  return {
+    ok: true,
+    month,
+    limit,
+    charactersUsed: reserved.characters_used,
+    requestCount: reserved.request_count,
+  };
+}
+
+async function readCurrentTranslationUsage(db, env) {
+  const limit = getGoogleTranslateMonthlyLimit(env);
+  const month = currentUsageMonth();
+
+  if (!db) {
+    return {
+      source: GOOGLE_TRANSLATE_SOURCE,
+      month,
+      charactersUsed: 0,
+      requestCount: 0,
+      monthlyLimit: limit,
+      remainingCharacters: limit,
+      trackingEnabled: false,
+    };
+  }
+
+  const row = await readTranslationUsage(db, GOOGLE_TRANSLATE_SOURCE, month);
+  const charactersUsed = row.characters_used ?? 0;
+  return {
+    source: GOOGLE_TRANSLATE_SOURCE,
+    month,
+    charactersUsed,
+    requestCount: row.request_count ?? 0,
+    monthlyLimit: limit,
+    remainingCharacters: Math.max(limit - charactersUsed, 0),
+    trackingEnabled: true,
+  };
+}
+
+async function readTranslationUsage(db, source, month) {
+  if (!db) {
+    return {};
+  }
+
+  const row = await db
+    .prepare(
+      `SELECT characters_used, request_count, updated_at
+       FROM translation_usage
+       WHERE source = ? AND usage_month = ?
+       LIMIT 1`,
+    )
+    .bind(source, month)
+    .first();
+
+  return row ?? {};
 }
 
 async function readEcdictWord(db, term) {
@@ -408,15 +699,17 @@ async function fetchDatamuse(term, type, env) {
     : [];
 }
 
-async function fetchWithTimeout(url) {
+async function fetchWithTimeout(url, init = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
     return await fetch(url, {
+      ...init,
       headers: {
         Accept: "application/json",
         "User-Agent": "EN-Learning-Worker/0.1",
+        ...init.headers,
       },
       signal: controller.signal,
     });
@@ -577,6 +870,54 @@ function uniqueByText(values) {
 function getNumber(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function getGoogleTranslateMonthlyLimit(env) {
+  return getNumber(env.GOOGLE_TRANSLATE_MONTHLY_LIMIT, DEFAULT_GOOGLE_TRANSLATE_MONTHLY_LIMIT);
+}
+
+function currentUsageMonth() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+function countCharacters(value) {
+  return Array.from(value || "").length;
+}
+
+async function createTranslationCacheKey(purpose, text) {
+  const normalized = `${purpose}:${String(text).trim().toLowerCase()}`;
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(normalized),
+  );
+  return `${purpose}:${toHex(digest)}`;
+}
+
+function toHex(buffer) {
+  return [...new Uint8Array(buffer)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function cleanChineseMeaning(text) {
+  if (!text) {
+    return "";
+  }
+
+  return String(text).replace(/\s+/g, " ").trim();
+}
+
+function cleanTranslatedSentence(text) {
+  return String(text ?? "").replace(/\s+/g, " ").trim();
+}
+
+function decodeHtmlEntities(value) {
+  return String(value ?? "")
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, "\"")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
 }
 
 function isTruthy(value) {

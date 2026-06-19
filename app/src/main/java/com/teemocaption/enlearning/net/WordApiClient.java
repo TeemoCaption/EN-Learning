@@ -34,15 +34,17 @@ public class WordApiClient {
         String separator = baseUrl.endsWith("/") ? "" : "/";
         String json = get(baseUrl + separator + "word?term=" + encode(word));
         JSONObject object = new JSONObject(json);
+        if (!object.optBoolean("ok", true)) {
+            throw new IOException(object.optString("message", "Backend lookup failed."));
+        }
         WordEntry entry = readUnifiedWord(object, word);
         entry.source = "後端字典服務";
-        entry.partial = !entry.hasDisplayableData();
         return entry;
     }
 
     private WordEntry lookupFromPublicApis(String word) throws IOException, JSONException {
         WordEntry entry = new WordEntry(word);
-        entry.source = "Free Dictionary / Datamuse / MyMemory";
+        entry.source = "Free Dictionary / Datamuse";
 
         boolean dictionaryOk = false;
         try {
@@ -65,22 +67,10 @@ public class WordApiClient {
             entry.relatedWords = WordEntry.cleanList(entry.relatedWords, 10);
         }
 
-        try {
-            String translated = translateToTraditionalChinese(word);
-            if (isBlank(translated) || translated.equalsIgnoreCase(word)) {
-                translated = translateToTraditionalChinese(firstDefinition(entry.englishDefinition));
-            }
-            entry.chineseMeaning = shortenChineseMeaning(translated);
-        } catch (IOException | JSONException ignored) {
-            if (entry.chineseMeaning == null) entry.chineseMeaning = "";
-        }
-
         entry.partial = !dictionaryOk
                 || isBlank(entry.chineseMeaning)
                 || isBlank(entry.phonetic)
-                || entry.examples.isEmpty()
-                || entry.synonyms.isEmpty()
-                || entry.relatedWords.isEmpty();
+                || isBlank(entry.englishDefinition);
         if (!dictionaryOk && !entry.hasDisplayableData()) {
             throw new IOException("No remote word data");
         }
@@ -154,40 +144,21 @@ public class WordApiClient {
         return values;
     }
 
-    private String translateToTraditionalChinese(String text) throws IOException, JSONException {
-        String json = get("https://api.mymemory.translated.net/get?q=" + encode(text) + "&langpair=en%7Czh-TW");
-        JSONObject object = new JSONObject(json);
-        JSONObject response = object.optJSONObject("responseData");
-        if (response == null) return "";
-        return response.optString("translatedText", "");
-    }
-
-    private static String firstDefinition(String text) {
-        if (text == null || text.trim().isEmpty()) return "";
-        String[] parts = text.split("[.;]");
-        return parts.length == 0 ? text.trim() : parts[0].trim();
-    }
-
     private static String shortenChineseMeaning(String text) {
         if (text == null) return "";
-        String cleaned = text
+        return text
                 .replace("&#39;", "'")
                 .replace("&quot;", "\"")
                 .replaceAll("\\s+", " ")
                 .trim();
-        if (cleaned.isEmpty()) return "";
-
-        String[] parts = cleaned.split("[。；;，,：:]");
-        if (parts.length > 0 && !parts[0].trim().isEmpty()) {
-            cleaned = parts[0].trim();
-        }
-        if (cleaned.length() > 18) {
-            cleaned = cleaned.substring(0, 18);
-        }
-        return cleaned;
     }
 
     private WordEntry readUnifiedWord(JSONObject object, String fallbackWord) {
+        JSONObject backendEntry = object.optJSONObject("entry");
+        if (backendEntry != null) {
+            return readBackendEntry(object, backendEntry, fallbackWord);
+        }
+
         WordEntry entry = new WordEntry(object.optString("word", fallbackWord));
         entry.originalWord = object.optString("originalWord", entry.word);
         entry.chineseMeaning = object.optString("chineseMeaning", "");
@@ -195,10 +166,90 @@ public class WordApiClient {
         entry.partOfSpeech = object.optString("partOfSpeech", "");
         entry.englishDefinition = object.optString("englishDefinition", "");
         entry.examples = readStringArray(object, "examples", 3);
+        entry.exampleTranslations = readStringArray(object, "exampleTranslations", 3);
         entry.synonyms = readStringArray(object, "synonyms", 10);
         entry.relatedWords = readStringArray(object, "relatedWords", 10);
         entry.partial = object.optBoolean("partial", false);
         return entry;
+    }
+
+    private WordEntry readBackendEntry(JSONObject response, JSONObject object, String fallbackWord) {
+        WordEntry entry = new WordEntry(object.optString("word",
+                object.optString("canonicalWord", fallbackWord)));
+        entry.originalWord = response.optString("term", entry.word);
+        entry.chineseMeaning = shortenChineseMeaning(readFirstObjectText(object, "translations", "text"));
+        entry.phonetic = object.optString("phonetic", "");
+        entry.partOfSpeech = join(readStringArray(object, "partsOfSpeech", 4));
+        entry.englishDefinition = join(readObjectTextArray(object, "definitions", "definition", 3));
+        readBackendExamples(object, entry);
+        entry.synonyms = readStringArray(object, "synonyms", 10);
+        entry.relatedWords = readStringArray(object, "nearSynonyms", 10);
+        entry.partial = isBackendPending(response);
+        return entry;
+    }
+
+    private void readBackendExamples(JSONObject object, WordEntry entry) {
+        JSONArray array = object.optJSONArray("examples");
+        if (array == null) {
+            entry.examples = readStringArray(object, "examples", 3);
+            return;
+        }
+
+        List<String> examples = new ArrayList<>();
+        List<String> translations = new ArrayList<>();
+        for (int i = 0; i < array.length() && examples.size() < 3; i++) {
+            Object value = array.opt(i);
+            if (value instanceof JSONObject) {
+                JSONObject item = (JSONObject) value;
+                String text = item.optString("text", "").trim();
+                if (!text.isEmpty()) {
+                    examples.add(text);
+                    String translation = item.optString("translation", "").trim();
+                    if (!translation.isEmpty()) translations.add(translation);
+                }
+            } else {
+                String text = array.optString(i, "").trim();
+                if (!text.isEmpty()) examples.add(text);
+            }
+        }
+        entry.examples = WordEntry.cleanList(examples, 3);
+        entry.exampleTranslations = WordEntry.cleanList(translations, 3);
+    }
+
+    private boolean isBackendPending(JSONObject response) {
+        String status = response.optString("status", "");
+        if ("pending".equals(status)) return true;
+        JSONArray missing = response.optJSONArray("missing");
+        if (missing == null) return false;
+        for (int i = 0; i < missing.length(); i++) {
+            String value = missing.optString(i, "");
+            if ("translation".equals(value) || "phonetic".equals(value) || "definition".equals(value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String readFirstObjectText(JSONObject object, String key, String textKey) {
+        List<String> values = readObjectTextArray(object, key, textKey, 1);
+        return values.isEmpty() ? "" : values.get(0);
+    }
+
+    private List<String> readObjectTextArray(JSONObject object, String key, String textKey, int maxItems) {
+        List<String> values = new ArrayList<>();
+        JSONArray array = object.optJSONArray(key);
+        if (array == null) return values;
+        for (int i = 0; i < array.length() && values.size() < maxItems; i++) {
+            Object raw = array.opt(i);
+            if (raw instanceof JSONObject) {
+                String value = ((JSONObject) raw).optString(textKey, "").trim();
+                if (!value.isEmpty()) values.add(value);
+            } else {
+                String value = array.optString(i, "").trim();
+                if (!value.isEmpty()) values.add(value);
+            }
+        }
+        return values;
     }
 
     private List<String> readStringArray(JSONObject object, String key, int maxItems) {
@@ -206,7 +257,13 @@ public class WordApiClient {
         JSONArray array = object.optJSONArray(key);
         if (array != null) {
             for (int i = 0; i < array.length() && values.size() < maxItems; i++) {
-                String value = array.optString(i, "");
+                Object raw = array.opt(i);
+                String value;
+                if (raw instanceof JSONObject) {
+                    value = ((JSONObject) raw).optString("text", "");
+                } else {
+                    value = array.optString(i, "");
+                }
                 if (!value.trim().isEmpty()) values.add(value.trim());
             }
             return values;

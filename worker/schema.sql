@@ -26,3 +26,22 @@ CREATE TABLE IF NOT EXISTS lookup_failures (
   last_failed_at TEXT NOT NULL,
   retry_count INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS translation_cache (
+  cache_key TEXT NOT NULL,
+  target_language TEXT NOT NULL,
+  input_text TEXT NOT NULL,
+  translated_text TEXT NOT NULL,
+  source TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (cache_key, target_language)
+);
+
+CREATE TABLE IF NOT EXISTS translation_usage (
+  source TEXT NOT NULL,
+  usage_month TEXT NOT NULL,
+  characters_used INTEGER NOT NULL DEFAULT 0,
+  request_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (source, usage_month)
+);

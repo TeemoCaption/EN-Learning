@@ -550,7 +550,10 @@ public class MainActivity extends Activity {
 
         addMeaningRows(card, entry);
 
-        addExampleCard(card, displayExample(entry));
+        String example = displayExample(entry);
+        if (!isBlank(example)) {
+            addExampleCard(card, example, displayExampleTranslation(entry));
+        }
 
         if (!isBlank(entry.englishDefinition)) {
             addDefinitionCard(card, firstDefinitionText(entry.englishDefinition));
@@ -605,7 +608,7 @@ public class MainActivity extends Activity {
         return row;
     }
 
-    private void addExampleCard(LinearLayout parent, String example) {
+    private void addExampleCard(LinearLayout parent, String example, String translation) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
@@ -629,6 +632,17 @@ public class MainActivity extends Activity {
         exampleView.setLineSpacing(0, 1.18f);
         exampleView.setPadding(0, dp(6), dp(8), 0);
         texts.addView(exampleView);
+
+        if (!isBlank(translation)) {
+            TextView translationView = new TextView(this);
+            translationView.setText(translation);
+            translationView.setTextColor(0xFF6B7280);
+            translationView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+            translationView.setLineSpacing(0, 1.18f);
+            translationView.setPadding(0, dp(10), dp(8), 0);
+            texts.addView(translationView);
+        }
+
         card.addView(texts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
         ImageButton speak = lightIconButton("朗讀例句", v -> speechController.speak(example));
@@ -950,8 +964,15 @@ public class MainActivity extends Activity {
             String example = entry.examples.get(0);
             if (!isBlank(example)) return example.trim();
         }
-        String word = entry == null || isBlank(entry.word) ? "this word" : entry.word.trim();
-        return "I learned the word \"" + word + "\" in my English notebook.";
+        return "";
+    }
+
+    private String displayExampleTranslation(WordEntry entry) {
+        if (entry != null && entry.exampleTranslations != null && !entry.exampleTranslations.isEmpty()) {
+            String translation = entry.exampleTranslations.get(0);
+            if (!isBlank(translation)) return translation.trim();
+        }
+        return "";
     }
 
     private boolean isBlank(String value) {
