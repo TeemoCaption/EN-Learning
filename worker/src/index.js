@@ -11,6 +11,13 @@ const PASSWORD_HASH_ITERATIONS = 100000;
 const AUTH_CODE_TTL_SECONDS = 10 * 60;
 const AUTH_CODE_COOLDOWN_SECONDS = 60;
 const MAX_AUTH_CODE_ATTEMPTS = 5;
+const FIREBASE_JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
+const FIREBASE_TOKEN_ISSUER = "https://securetoken.google.com";
+
+let firebaseJwksCache = {
+  keys: [],
+  expiresAt: 0,
+};
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -35,6 +42,7 @@ export default {
           hasGoogleTranslate: Boolean(env.DB && env.GOOGLE_TRANSLATE_API_KEY),
           emailProvider: getEmailProvider(env),
           hasEmailSender: Boolean(env.EMAIL_FROM && (env.BREVO_API_KEY || env.RESEND_API_KEY || env.EMAIL_API_KEY)),
+          hasFirebaseAuth: Boolean(env.FIREBASE_PROJECT_ID),
           googleTranslateMonthlyLimit: getGoogleTranslateMonthlyLimit(env),
           googleTranslateExampleLimit: getExampleTranslationLimit(env),
         });
@@ -58,6 +66,10 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/auth/member") {
         return jsonResponse(await handleMemberAuth(request, env));
+      }
+
+      if (request.method === "POST" && url.pathname === "/auth/firebase") {
+        return jsonResponse(await handleFirebaseAuth(request, env));
       }
 
       if (request.method === "POST" && url.pathname === "/auth/email/request") {
@@ -88,27 +100,32 @@ export default {
 
       if (request.method === "GET" && url.pathname === "/book") {
         const user = await requireUser(request, env);
+        ensureVerifiedUser(user);
         return jsonResponse(await handleBookList(user, env));
       }
 
       if (request.method === "GET" && url.pathname === "/book/contains") {
         const user = await requireUser(request, env);
+        ensureVerifiedUser(user);
         const word = url.searchParams.get("word");
         return jsonResponse(await handleBookContains(user, word, env));
       }
 
       if (request.method === "POST" && url.pathname === "/book") {
         const user = await requireUser(request, env);
+        ensureVerifiedUser(user);
         return jsonResponse(await handleBookAdd(request, user, env));
       }
 
       if (request.method === "POST" && url.pathname === "/book/familiarity") {
         const user = await requireUser(request, env);
+        ensureVerifiedUser(user);
         return jsonResponse(await handleBookFamiliarity(request, user, env));
       }
 
       if (request.method === "DELETE" && url.pathname === "/book") {
         const user = await requireUser(request, env);
+        ensureVerifiedUser(user);
         const word = url.searchParams.get("word");
         return jsonResponse(await handleBookRemove(user, word, env));
       }
@@ -225,6 +242,100 @@ async function handleMemberAuth(request, env) {
     token: session.token,
     expiresAt: session.expiresAt,
     created: true,
+  };
+}
+
+async function handleFirebaseAuth(request, env) {
+  ensureDatabase(env);
+  const body = await readJson(request);
+  const idToken = String(body?.idToken ?? "").trim();
+  if (!idToken) {
+    throw httpError(400, "missing_firebase_token", "缺少 Firebase 登入令牌。");
+  }
+
+  const firebaseUser = await verifyFirebaseIdToken(idToken, env);
+  const user = await upsertFirebaseUser(env.DB, firebaseUser);
+  const session = await createSession(env.DB, user.id);
+  return {
+    ok: true,
+    user: publicUser(user),
+    emailVerified: Boolean(user.email_verified),
+    token: session.token,
+    expiresAt: session.expiresAt,
+    created: Boolean(user.created),
+    firebaseUid: firebaseUser.uid,
+  };
+}
+
+async function upsertFirebaseUser(db, firebaseUser) {
+  const now = new Date().toISOString();
+  const email = normalizeEmail(firebaseUser.email);
+  if (!email) {
+    throw httpError(400, "firebase_email_missing", "Firebase 會員缺少信箱資料。");
+  }
+
+  let localUser = await db
+    .prepare(
+      `SELECT u.id, u.email, u.created_at,
+              EXISTS(SELECT 1 FROM verified_emails v WHERE v.email = u.email) AS email_verified
+       FROM firebase_users f
+       JOIN users u ON u.id = f.user_id
+       WHERE f.firebase_uid = ?
+       LIMIT 1`,
+    )
+    .bind(firebaseUser.uid)
+    .first();
+
+  let created = false;
+  if (!localUser) {
+    localUser = await db
+      .prepare(
+        `SELECT u.id, u.email, u.created_at,
+                EXISTS(SELECT 1 FROM verified_emails v WHERE v.email = u.email) AS email_verified
+         FROM users u
+         WHERE u.email = ?
+         LIMIT 1`,
+      )
+      .bind(email)
+      .first();
+  }
+
+  if (!localUser) {
+    localUser = await createUser(db, email, randomHex(32));
+    created = true;
+  }
+
+  await db
+    .prepare(
+      `INSERT INTO firebase_users
+         (firebase_uid, user_id, email, email_verified, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(firebase_uid) DO UPDATE SET
+         user_id = excluded.user_id,
+         email = excluded.email,
+         email_verified = excluded.email_verified,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(
+      firebaseUser.uid,
+      localUser.id,
+      email,
+      firebaseUser.emailVerified ? 1 : 0,
+      now,
+      now,
+    )
+    .run();
+
+  if (firebaseUser.emailVerified) {
+    await markEmailVerified(db, email, localUser.id);
+    localUser.email_verified = 1;
+  }
+
+  return {
+    ...localUser,
+    email,
+    created,
+    email_verified: Boolean(localUser.email_verified),
   };
 }
 
@@ -578,6 +689,12 @@ async function requireUser(request, env) {
   };
 }
 
+function ensureVerifiedUser(user) {
+  if (!user?.email_verified) {
+    throw httpError(403, "email_not_verified", "請先完成信箱驗證。");
+  }
+}
+
 async function createSession(db, userId) {
   const token = randomHex(32);
   const tokenHash = await sha256Hex(token);
@@ -720,6 +837,131 @@ async function hashAuthCode(code, salt, env) {
 
 function normalizeAuthCode(value) {
   return String(value ?? "").replace(/\D+/g, "").slice(0, 6);
+}
+
+async function verifyFirebaseIdToken(idToken, env) {
+  const projectId = String(env.FIREBASE_PROJECT_ID ?? "").trim();
+  if (!projectId) {
+    throw httpError(503, "firebase_not_configured", "尚未設定 Firebase Project ID。");
+  }
+
+  const parts = idToken.split(".");
+  if (parts.length !== 3) {
+    throw httpError(401, "invalid_firebase_token", "Firebase 登入令牌格式不正確。");
+  }
+
+  const header = parseJwtPart(parts[0]);
+  const payload = parseJwtPart(parts[1]);
+  if (header.alg !== "RS256" || !header.kid) {
+    throw httpError(401, "invalid_firebase_token", "Firebase 登入令牌標頭不正確。");
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (!payload.exp || payload.exp <= now) {
+    throw httpError(401, "firebase_token_expired", "Firebase 登入狀態已過期，請重新登入。");
+  }
+  if (!payload.iat || payload.iat > now + 60) {
+    throw httpError(401, "invalid_firebase_token", "Firebase 登入令牌時間不正確。");
+  }
+  if (payload.aud !== projectId) {
+    throw httpError(401, "invalid_firebase_token", "Firebase 專案不符合目前後端設定。");
+  }
+  if (payload.iss !== `${FIREBASE_TOKEN_ISSUER}/${projectId}`) {
+    throw httpError(401, "invalid_firebase_token", "Firebase 登入令牌發行者不正確。");
+  }
+  if (!payload.sub || typeof payload.sub !== "string" || payload.sub.length > 128) {
+    throw httpError(401, "invalid_firebase_token", "Firebase 會員識別不正確。");
+  }
+
+  const key = await readFirebasePublicKey(header.kid);
+  const verified = await crypto.subtle.verify(
+    { name: "RSASSA-PKCS1-v1_5" },
+    key,
+    base64UrlToBytes(parts[2]),
+    new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
+  );
+  if (!verified) {
+    throw httpError(401, "invalid_firebase_token", "Firebase 登入令牌簽章驗證失敗。");
+  }
+
+  return {
+    uid: payload.sub,
+    email: normalizeEmail(payload.email),
+    emailVerified: payload.email_verified === true,
+  };
+}
+
+async function readFirebasePublicKey(kid) {
+  const now = Date.now();
+  if (!firebaseJwksCache.keys.length || firebaseJwksCache.expiresAt <= now) {
+    const response = await fetchWithTimeout(FIREBASE_JWKS_URL, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "EN-Learning-Worker/0.1",
+      },
+    });
+    if (!response.ok) {
+      throw httpError(503, "firebase_keys_unavailable", "目前無法取得 Firebase 公開金鑰。");
+    }
+
+    const cacheControl = response.headers.get("Cache-Control") ?? "";
+    const maxAge = Number.parseInt(cacheControl.match(/max-age=(\d+)/)?.[1] ?? "3600", 10);
+    const body = await response.json();
+    firebaseJwksCache = {
+      keys: Array.isArray(body.keys) ? body.keys : [],
+      expiresAt: now + Math.max(60, maxAge) * 1000,
+    };
+  }
+
+  const jwk = firebaseJwksCache.keys.find((item) => item.kid === kid);
+  if (!jwk) {
+    firebaseJwksCache = { keys: [], expiresAt: 0 };
+    throw httpError(401, "firebase_key_not_found", "找不到 Firebase 登入令牌對應的公開金鑰。");
+  }
+
+  return await crypto.subtle.importKey(
+    "jwk",
+    {
+      kty: jwk.kty,
+      kid: jwk.kid,
+      n: jwk.n,
+      e: jwk.e,
+      alg: "RS256",
+      ext: true,
+    },
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      hash: "SHA-256",
+    },
+    false,
+    ["verify"],
+  );
+}
+
+function parseJwtPart(part) {
+  try {
+    return JSON.parse(base64UrlToString(part));
+  } catch {
+    throw httpError(401, "invalid_firebase_token", "Firebase 登入令牌內容無法解析。");
+  }
+}
+
+function base64UrlToString(value) {
+  return atob(toBase64(value));
+}
+
+function base64UrlToBytes(value) {
+  const binary = atob(toBase64(value));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function toBase64(value) {
+  const text = String(value ?? "").replace(/-/g, "+").replace(/_/g, "/");
+  return text.padEnd(text.length + (4 - (text.length % 4 || 4)), "=");
 }
 
 async function sendAuthEmail(env, { to, purpose, code }) {

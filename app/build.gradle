@@ -6,6 +6,10 @@ def configuredWordApiBaseUrl = project.findProperty("WORD_API_BASE_URL") ?: Syst
 def escapedWordApiBaseUrl = configuredWordApiBaseUrl
         .replace("\\", "\\\\")
         .replace("\"", "\\\"")
+def configuredFirebaseWebApiKey = project.findProperty("FIREBASE_WEB_API_KEY") ?: System.getenv("FIREBASE_WEB_API_KEY") ?: ""
+def escapedFirebaseWebApiKey = configuredFirebaseWebApiKey
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
 
 android {
     namespace "com.teemocaption.enlearning"
@@ -23,6 +27,7 @@ android {
         versionName "0.1.0"
 
         buildConfigField "String", "WORD_API_BASE_URL", "\"${escapedWordApiBaseUrl}\""
+        buildConfigField "String", "FIREBASE_WEB_API_KEY", "\"${escapedFirebaseWebApiKey}\""
     }
 
     compileOptions {

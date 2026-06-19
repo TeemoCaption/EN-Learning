@@ -45,33 +45,22 @@ public class WordApiClient {
         return authenticate("auth/member", email, password);
     }
 
-    public void requestEmailVerification(String token) throws IOException, JSONException {
-        JSONObject object = new JSONObject(request("POST", backendUrl("auth/email/request"), "{}", token));
-        if (!object.optBoolean("ok", false)) throwBackendError(object);
-    }
-
-    public boolean verifyEmail(String token, String code) throws IOException, JSONException {
+    public AuthSession authenticateFirebase(String firebaseIdToken) throws IOException, JSONException {
         JSONObject body = new JSONObject();
-        body.put("code", code);
-        JSONObject object = new JSONObject(request("POST", backendUrl("auth/email/verify"), body.toString(), token));
+        body.put("idToken", firebaseIdToken);
+        JSONObject object = new JSONObject(request("POST", backendUrl("auth/firebase"), body.toString(), null));
         if (!object.optBoolean("ok", false)) throwBackendError(object);
-        return object.optBoolean("emailVerified", false);
-    }
-
-    public void requestPasswordReset(String email) throws IOException, JSONException {
-        JSONObject body = new JSONObject();
-        body.put("email", email);
-        JSONObject object = new JSONObject(request("POST", backendUrl("auth/password-reset/request"), body.toString(), null));
-        if (!object.optBoolean("ok", false)) throwBackendError(object);
-    }
-
-    public void confirmPasswordReset(String email, String code, String password) throws IOException, JSONException {
-        JSONObject body = new JSONObject();
-        body.put("email", email);
-        body.put("code", code);
-        body.put("password", password);
-        JSONObject object = new JSONObject(request("POST", backendUrl("auth/password-reset/confirm"), body.toString(), null));
-        if (!object.optBoolean("ok", false)) throwBackendError(object);
+        JSONObject user = object.optJSONObject("user");
+        AuthSession session = new AuthSession();
+        session.token = object.optString("token", "");
+        session.email = user == null ? "" : user.optString("email", "");
+        session.expiresAt = object.optString("expiresAt", "");
+        session.created = object.optBoolean("created", false);
+        session.emailVerified = object.optBoolean("emailVerified",
+                user != null && user.optBoolean("emailVerified", false));
+        session.firebaseUid = object.optString("firebaseUid", "");
+        if (session.token.trim().isEmpty()) throw new IOException("Backend did not return an auth token.");
+        return session;
     }
 
     public List<WordEntry> getBook(String token) throws IOException, JSONException {

@@ -98,6 +98,18 @@ CREATE TABLE IF NOT EXISTS verified_emails (
 CREATE INDEX IF NOT EXISTS idx_verified_emails_user
   ON verified_emails (user_id);
 
+CREATE TABLE IF NOT EXISTS firebase_users (
+  firebase_uid TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL,
+  email_verified INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_firebase_users_email
+  ON firebase_users (email);
+
 CREATE TABLE IF NOT EXISTS auth_email_codes (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL,

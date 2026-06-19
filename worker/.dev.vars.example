@@ -9,8 +9,11 @@ GOOGLE_TRANSLATE_MONTHLY_LIMIT=450000
 # Number of dictionary example sentences translated to Traditional Chinese.
 GOOGLE_TRANSLATE_EXAMPLE_LIMIT=3
 
-# Free email provider for verification code and password reset.
-# Recommended free setup: brevo. Alternative: resend.
+# Required when Android uses Firebase Authentication.
+FIREBASE_PROJECT_ID=
+
+# Legacy custom email-code provider. Android now uses Firebase email links
+# for email verification and password reset, so these are optional.
 EMAIL_PROVIDER=brevo
 EMAIL_FROM=
 EMAIL_FROM_NAME=Alpaca English

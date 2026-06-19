@@ -33,6 +33,7 @@ import com.teemocaption.enlearning.data.AuthSession;
 import com.teemocaption.enlearning.data.WordEntry;
 import com.teemocaption.enlearning.data.WordRepository;
 import com.teemocaption.enlearning.importing.DocumentTextReader;
+import com.teemocaption.enlearning.net.FirebaseAuthClient;
 import com.teemocaption.enlearning.net.WordApiClient;
 import com.teemocaption.enlearning.util.SpeechController;
 import com.teemocaption.enlearning.util.WordNormalizer;
@@ -52,6 +53,9 @@ public class MainActivity extends Activity {
     private static final String PREF_EMAIL = "email";
     private static final String PREF_EXPIRES_AT = "expires_at";
     private static final String PREF_EMAIL_VERIFIED = "email_verified";
+    private static final String PREF_FIREBASE_ID_TOKEN = "firebase_id_token";
+    private static final String PREF_FIREBASE_REFRESH_TOKEN = "firebase_refresh_token";
+    private static final String PREF_FIREBASE_UID = "firebase_uid";
     private static final int COLOR_BG = 0xFFF7F3EA;
     private static final int COLOR_SURFACE = 0xFFFFFFFF;
     private static final int COLOR_INK = 0xFF253247;
@@ -68,6 +72,7 @@ public class MainActivity extends Activity {
     private AppDatabase database;
     private WordRepository repository;
     private WordApiClient wordApiClient;
+    private FirebaseAuthClient firebaseAuthClient;
     private DocumentTextReader documentTextReader;
     private SpeechController speechController;
     private ExecutorService executor;
@@ -83,6 +88,9 @@ public class MainActivity extends Activity {
     private String authEmail = "";
     private String authExpiresAt = "";
     private boolean authEmailVerified = false;
+    private String firebaseIdToken = "";
+    private String firebaseRefreshToken = "";
+    private String firebaseUid = "";
     private final Set<String> cloudFavoriteWords = new HashSet<>();
 
     @Override
@@ -90,6 +98,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         database = new AppDatabase(this);
         wordApiClient = new WordApiClient();
+        firebaseAuthClient = new FirebaseAuthClient();
         repository = new WordRepository(database, wordApiClient);
         documentTextReader = new DocumentTextReader();
         speechController = new SpeechController(this);
@@ -129,6 +138,9 @@ public class MainActivity extends Activity {
         authEmail = prefs.getString(PREF_EMAIL, "");
         authExpiresAt = prefs.getString(PREF_EXPIRES_AT, "");
         authEmailVerified = prefs.getBoolean(PREF_EMAIL_VERIFIED, false);
+        firebaseIdToken = prefs.getString(PREF_FIREBASE_ID_TOKEN, "");
+        firebaseRefreshToken = prefs.getString(PREF_FIREBASE_REFRESH_TOKEN, "");
+        firebaseUid = prefs.getString(PREF_FIREBASE_UID, "");
     }
 
     private void saveAuthSession(AuthSession session) {
@@ -136,20 +148,35 @@ public class MainActivity extends Activity {
         authEmail = session == null ? "" : safeString(session.email);
         authExpiresAt = session == null ? "" : safeString(session.expiresAt);
         authEmailVerified = session != null && session.emailVerified;
+        firebaseIdToken = session == null ? "" : safeString(session.firebaseIdToken);
+        firebaseRefreshToken = session == null ? "" : safeString(session.firebaseRefreshToken);
+        firebaseUid = session == null ? "" : safeString(session.firebaseUid);
         getSharedPreferences(PREFS_AUTH, MODE_PRIVATE)
                 .edit()
                 .putString(PREF_TOKEN, authToken)
                 .putString(PREF_EMAIL, authEmail)
                 .putString(PREF_EXPIRES_AT, authExpiresAt)
                 .putBoolean(PREF_EMAIL_VERIFIED, authEmailVerified)
+                .putString(PREF_FIREBASE_ID_TOKEN, firebaseIdToken)
+                .putString(PREF_FIREBASE_REFRESH_TOKEN, firebaseRefreshToken)
+                .putString(PREF_FIREBASE_UID, firebaseUid)
                 .apply();
     }
 
-    private void saveEmailVerified(boolean verified) {
-        authEmailVerified = verified;
+    private void saveFirebaseSession(AuthSession session) {
+        if (session == null) return;
+        if (!isBlank(session.firebaseIdToken)) firebaseIdToken = session.firebaseIdToken;
+        if (!isBlank(session.firebaseRefreshToken)) firebaseRefreshToken = session.firebaseRefreshToken;
+        if (!isBlank(session.firebaseUid)) firebaseUid = session.firebaseUid;
+        if (!isBlank(session.email)) authEmail = session.email;
+        authEmailVerified = session.emailVerified;
         getSharedPreferences(PREFS_AUTH, MODE_PRIVATE)
                 .edit()
-                .putBoolean(PREF_EMAIL_VERIFIED, verified)
+                .putString(PREF_EMAIL, authEmail)
+                .putBoolean(PREF_EMAIL_VERIFIED, authEmailVerified)
+                .putString(PREF_FIREBASE_ID_TOKEN, firebaseIdToken)
+                .putString(PREF_FIREBASE_REFRESH_TOKEN, firebaseRefreshToken)
+                .putString(PREF_FIREBASE_UID, firebaseUid)
                 .apply();
     }
 
@@ -158,6 +185,9 @@ public class MainActivity extends Activity {
         authEmail = "";
         authExpiresAt = "";
         authEmailVerified = false;
+        firebaseIdToken = "";
+        firebaseRefreshToken = "";
+        firebaseUid = "";
         cloudFavoriteWords.clear();
         getSharedPreferences(PREFS_AUTH, MODE_PRIVATE).edit().clear().apply();
     }
@@ -399,9 +429,16 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "密碼至少需要 8 個字元。", Toast.LENGTH_LONG).show();
             return;
         }
-        showLoading("會員驗證中，正在連線到雲端會員服務。");
+        showLoading("會員驗證中，正在連線到 Firebase。");
         runBackground(
-                () -> wordApiClient.authenticateMember(email, password),
+                () -> {
+                    AuthSession firebaseSession = firebaseAuthClient.authenticate(email, password);
+                    AuthSession cloudSession = wordApiClient.authenticateFirebase(firebaseSession.firebaseIdToken);
+                    cloudSession.firebaseIdToken = firebaseSession.firebaseIdToken;
+                    cloudSession.firebaseRefreshToken = firebaseSession.firebaseRefreshToken;
+                    cloudSession.firebaseUid = firebaseSession.firebaseUid;
+                    return cloudSession;
+                },
                 session -> {
                     saveAuthSession(session);
                     Toast.makeText(this,
@@ -423,26 +460,15 @@ public class MainActivity extends Activity {
         }
         resetContent();
         addHeading("信箱驗證");
-        addBody("請驗證 " + authEmail + "，完成後才能同步雲端收藏與匯入單字。");
+        addBody("Firebase 會寄驗證連結到 " + authEmail + "。請先到信箱點開連結，完成後回到 APP 按下「我已完成驗證」。");
         if (!isBlank(errorMessage)) {
             addErrorMessage(errorMessage);
         }
 
-        EditText code = new EditText(this);
-        code.setSingleLine(true);
-        code.setHint("6 位數驗證碼");
-        code.setInputType(InputType.TYPE_CLASS_NUMBER);
-        code.setTextColor(COLOR_INK);
-        code.setHintTextColor(0xFF9CA3AF);
-        code.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        code.setPadding(dp(14), dp(10), dp(14), dp(10));
-        code.setBackground(makeBg(COLOR_SURFACE, COLOR_MINT, 8));
-        content.addView(code, fullWidth());
-
-        content.addView(primaryButton("寄送驗證碼", R.drawable.ic_book,
+        content.addView(primaryButton("寄送驗證信", R.drawable.ic_book,
                 v -> requestEmailVerification()), fullWidth());
-        content.addView(primaryButton("完成驗證", R.drawable.ic_search,
-                v -> confirmEmailVerification(code)), fullWidth());
+        content.addView(primaryButton("我已完成驗證", R.drawable.ic_search,
+                v -> confirmEmailVerification()), fullWidth());
         content.addView(secondaryButton("登出", v -> {
             clearAuthSession();
             showMemberLogin();
@@ -454,45 +480,65 @@ public class MainActivity extends Activity {
             showMemberLogin();
             return;
         }
-        showLoading("正在寄送信箱驗證碼...");
+        showLoading("正在請 Firebase 寄送驗證信...");
         runBackground(
                 () -> {
-                    wordApiClient.requestEmailVerification(authToken);
-                    return true;
+                    AuthSession refreshed = refreshFirebaseSession();
+                    if (!refreshed.emailVerified) {
+                        firebaseAuthClient.sendEmailVerification(refreshed.firebaseIdToken);
+                    }
+                    return refreshed;
                 },
-                ignored -> {
-                    Toast.makeText(this, "驗證碼已寄出，請查看信箱。", Toast.LENGTH_LONG).show();
+                refreshed -> {
+                    saveFirebaseSession(refreshed);
+                    if (refreshed.emailVerified) {
+                        confirmEmailVerification();
+                        return;
+                    }
+                    Toast.makeText(this, "驗證信已寄出，請查看信箱。", Toast.LENGTH_LONG).show();
                     showEmailVerification("");
                 },
                 this::showEmailVerification);
     }
 
-    private void confirmEmailVerification(EditText codeInput) {
-        String code = codeInput.getText().toString().trim();
-        if (code.replaceAll("\\D+", "").length() != 6) {
-            codeInput.setError("請輸入 6 位數驗證碼");
-            Toast.makeText(this, "請輸入 6 位數驗證碼。", Toast.LENGTH_SHORT).show();
+    private void confirmEmailVerification() {
+        if (!isLoggedIn()) {
+            showMemberLogin();
             return;
         }
-        showLoading("正在確認信箱驗證碼...");
+        showLoading("正在確認 Firebase 信箱驗證狀態...");
         runBackground(
-                () -> wordApiClient.verifyEmail(authToken, code),
-                verified -> {
-                    if (!verified) {
-                        showEmailVerification("信箱尚未完成驗證，請重新確認驗證碼。");
+                () -> {
+                    AuthSession refreshed = refreshFirebaseSession();
+                    AuthSession cloudSession = wordApiClient.authenticateFirebase(refreshed.firebaseIdToken);
+                    cloudSession.firebaseIdToken = refreshed.firebaseIdToken;
+                    cloudSession.firebaseRefreshToken = refreshed.firebaseRefreshToken;
+                    cloudSession.firebaseUid = refreshed.firebaseUid;
+                    return cloudSession;
+                },
+                session -> {
+                    saveAuthSession(session);
+                    if (!session.emailVerified) {
+                        showEmailVerification("Firebase 尚未顯示信箱已驗證，請確認驗證連結已完成開啟。");
                         return;
                     }
-                    saveEmailVerified(verified);
                     Toast.makeText(this, "信箱已完成驗證。", Toast.LENGTH_SHORT).show();
                     showBook();
                 },
                 this::showEmailVerification);
     }
 
+    private AuthSession refreshFirebaseSession() throws Exception {
+        if (isBlank(firebaseRefreshToken)) {
+            throw new Exception("缺少 Firebase 更新令牌，請重新登入。");
+        }
+        return firebaseAuthClient.refresh(firebaseRefreshToken);
+    }
+
     private void showPasswordReset(String errorMessage, String initialEmail) {
         resetContent();
         addHeading("忘記密碼");
-        addBody("輸入註冊信箱後先寄送重設碼，再用重設碼設定新密碼。");
+        addBody("輸入註冊信箱後，Firebase 會寄出官方重設密碼連結；請到信箱點開連結完成更新。");
         if (!isBlank(errorMessage)) {
             addErrorMessage(errorMessage);
         }
@@ -509,32 +555,8 @@ public class MainActivity extends Activity {
         email.setBackground(makeBg(COLOR_SURFACE, COLOR_MINT, 8));
         content.addView(email, fullWidth());
 
-        EditText code = new EditText(this);
-        code.setSingleLine(true);
-        code.setHint("6 位數重設碼");
-        code.setInputType(InputType.TYPE_CLASS_NUMBER);
-        code.setTextColor(COLOR_INK);
-        code.setHintTextColor(0xFF9CA3AF);
-        code.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        code.setPadding(dp(14), dp(10), dp(14), dp(10));
-        code.setBackground(makeBg(COLOR_SURFACE, COLOR_MINT, 8));
-        content.addView(code, fullWidth());
-
-        EditText password = new EditText(this);
-        password.setSingleLine(true);
-        password.setHint("新密碼，至少 8 個字元");
-        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        password.setTextColor(COLOR_INK);
-        password.setHintTextColor(0xFF9CA3AF);
-        password.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        password.setPadding(dp(14), dp(10), dp(14), dp(10));
-        password.setBackground(makeBg(COLOR_SURFACE, COLOR_MINT, 8));
-        content.addView(password, fullWidth());
-
-        content.addView(primaryButton("寄送重設碼", R.drawable.ic_book,
+        content.addView(primaryButton("寄送重設信", R.drawable.ic_book,
                 v -> requestPasswordReset(email)), fullWidth());
-        content.addView(primaryButton("更新密碼", R.drawable.ic_search,
-                v -> confirmPasswordReset(email, code, password)), fullWidth());
         content.addView(secondaryButton("返回登入", v -> showMemberLogin("", email.getText().toString())),
                 fullWidth());
     }
@@ -546,47 +568,14 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "請輸入有效的信箱。", Toast.LENGTH_SHORT).show();
             return;
         }
-        showLoading("正在寄送重設碼...");
+        showLoading("正在請 Firebase 寄送重設密碼信...");
         runBackground(
                 () -> {
-                    wordApiClient.requestPasswordReset(email);
+                    firebaseAuthClient.sendPasswordResetEmail(email);
                     return true;
                 },
                 ignored -> {
-                    Toast.makeText(this, "如果信箱已註冊，重設碼已寄出。", Toast.LENGTH_LONG).show();
-                    showPasswordReset("", email);
-                },
-                error -> showPasswordReset(error, email));
-    }
-
-    private void confirmPasswordReset(EditText emailInput, EditText codeInput, EditText passwordInput) {
-        String email = emailInput.getText().toString().trim().toLowerCase(Locale.US);
-        String code = codeInput.getText().toString().trim();
-        String password = passwordInput.getText().toString();
-        if (!isValidEmail(email)) {
-            emailInput.setError("請輸入有效的信箱");
-            Toast.makeText(this, "請輸入有效的信箱。", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (code.replaceAll("\\D+", "").length() != 6) {
-            codeInput.setError("請輸入 6 位數重設碼");
-            Toast.makeText(this, "請輸入 6 位數重設碼。", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (password.length() < 8) {
-            passwordInput.setError("密碼至少 8 個字元");
-            Toast.makeText(this, "新密碼至少需要 8 個字元。", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        showLoading("正在更新密碼...");
-        runBackground(
-                () -> {
-                    wordApiClient.confirmPasswordReset(email, code, password);
-                    return true;
-                },
-                ignored -> {
-                    clearAuthSession();
-                    Toast.makeText(this, "密碼已更新，請重新登入。", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "如果信箱已註冊，Firebase 會寄出重設密碼信。", Toast.LENGTH_LONG).show();
                     showMemberLogin("", email);
                 },
                 error -> showPasswordReset(error, email));

@@ -6,4 +6,7 @@ public class AuthSession {
     public String expiresAt;
     public boolean created;
     public boolean emailVerified;
+    public String firebaseIdToken;
+    public String firebaseRefreshToken;
+    public String firebaseUid;
 }
