@@ -740,13 +740,10 @@ public class MainActivity extends Activity {
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setPadding(0, 0, 0, dp(8));
 
-        TextView report = new TextView(this);
-        report.setText("回報");
-        report.setTextColor(0xFFB8B8B8);
-        report.setTypeface(Typeface.DEFAULT_BOLD);
-        report.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        top.addView(report, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        Space topSpacer = new Space(this);
+        top.addView(topSpacer, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
         if (hasBookSwipeContext()) {
             TextView counter = new TextView(this);
@@ -764,20 +761,22 @@ public class MainActivity extends Activity {
             top.addView(counter, counterParams);
         }
 
-        ImageButton favorite = roundIconButton(R.drawable.ic_heart, "加入收藏", 0xFFE83E65, 0xFFE83E65, v -> {
-            repository.addToBook(entry, "manual", "手動搜尋");
-            Toast.makeText(this, "已加入收藏。", Toast.LENGTH_SHORT).show();
-        });
-        favorite.setColorFilter(Color.WHITE);
+        ImageButton speak = lightIconButton("發音", v -> speechController.speak(entry.word));
+        LinearLayout.LayoutParams speakParams = new LinearLayout.LayoutParams(dp(42), dp(42));
+        speakParams.setMargins(0, 0, dp(8), 0);
+        top.addView(speak, speakParams);
+
+        ImageButton favorite = roundIconButton(R.drawable.ic_heart, "加入收藏", 0xFFE83E65, 0xFFE83E65, null);
+        updateFavoriteButton(favorite, entry);
+        favorite.setOnClickListener(v -> toggleFavorite(entry, favorite));
         LinearLayout.LayoutParams favoriteParams = new LinearLayout.LayoutParams(dp(42), dp(42));
-        favoriteParams.setMargins(dp(8), 0, 0, 0);
         top.addView(favorite, favoriteParams);
         card.addView(top, fullWidthNoMargin());
 
         LinearLayout wordRow = new LinearLayout(this);
         wordRow.setOrientation(LinearLayout.HORIZONTAL);
         wordRow.setGravity(Gravity.CENTER_VERTICAL);
-        wordRow.setPadding(0, dp(58), 0, 0);
+        wordRow.setPadding(0, dp(18), 0, 0);
 
         LinearLayout mainText = new LinearLayout(this);
         mainText.setOrientation(LinearLayout.VERTICAL);
@@ -798,8 +797,6 @@ public class MainActivity extends Activity {
         }
         wordRow.addView(mainText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        ImageButton speak = lightIconButton("發音", v -> speechController.speak(entry.word));
-        wordRow.addView(speak, new LinearLayout.LayoutParams(dp(44), dp(44)));
         card.addView(wordRow, fullWidthNoMargin());
 
         addMeaningRows(card, entry);
@@ -811,6 +808,48 @@ public class MainActivity extends Activity {
 
         if (hasBookSwipeContext()) activeBookSwipeCard = card;
         content.addView(card, fullWidth());
+    }
+
+    private void toggleFavorite(WordEntry entry, ImageButton favoriteButton) {
+        if (entry == null || isBlank(entry.word)) return;
+        UserWord userWord = database.getUserWord(entry.word);
+        if (userWord == null || !userWord.favorite) {
+            repository.addToBook(entry, "manual", "手動搜尋");
+            Toast.makeText(this, "已加入收藏。", Toast.LENGTH_SHORT).show();
+            updateFavoriteButton(favoriteButton, entry);
+            return;
+        }
+
+        database.removeUserWord(entry.word);
+        Toast.makeText(this, "已取消收藏。", Toast.LENGTH_SHORT).show();
+        if (hasBookSwipeContext() && isCurrentBookWord(entry.word)) {
+            bookSwipeEntries.remove(bookSwipeIndex);
+            if (bookSwipeEntries.isEmpty()) {
+                showBook();
+                return;
+            }
+            if (bookSwipeIndex >= bookSwipeEntries.size()) bookSwipeIndex = bookSwipeEntries.size() - 1;
+            renderWordDetail(bookSwipeEntries.get(bookSwipeIndex));
+            return;
+        }
+        updateFavoriteButton(favoriteButton, entry);
+    }
+
+    private void updateFavoriteButton(ImageButton button, WordEntry entry) {
+        boolean favorite = entry != null
+                && !isBlank(entry.word)
+                && database.getUserWord(entry.word) != null;
+        if (favorite) {
+            button.setImageResource(R.drawable.ic_heart);
+            button.setContentDescription("取消收藏");
+            button.setBackground(makeBg(0xFFE83E65, 0xFFE83E65, 8));
+            button.setColorFilter(Color.WHITE);
+        } else {
+            button.setImageResource(R.drawable.ic_heart_outline);
+            button.setContentDescription("加入收藏");
+            button.setBackground(makeBg(0xFFF1F3F5, 0xFFE5E7EB, 8));
+            button.setColorFilter(COLOR_MUTED);
+        }
     }
 
     private void addMeaningRows(LinearLayout parent, WordEntry entry) {
