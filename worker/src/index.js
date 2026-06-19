@@ -1,5 +1,4 @@
 const FREE_DICTIONARY_BASE_URL = "https://api.dictionaryapi.dev/api/v2/entries/en";
-const DATAMUSE_BASE_URL = "https://api.datamuse.com/words";
 const GOOGLE_TRANSLATE_BASE_URL = "https://translation.googleapis.com/language/translate/v2";
 const GOOGLE_TRANSLATE_SOURCE = "google_cloud_translation";
 const DEFAULT_CACHE_TTL_SECONDS = 60 * 60 * 24 * 14;
@@ -152,24 +151,18 @@ async function lookupWord(rawTerm, env, options = {}) {
     }
   }
 
-  const [ecdictResult, freeDictionaryResult, synonymsResult, nearSynonymsResult] =
+  const [ecdictResult, freeDictionaryResult] =
     await Promise.allSettled([
       readEcdictWord(env.DB, term),
       fetchFreeDictionary(term),
-      fetchDatamuse(term, "synonyms", env),
-      fetchDatamuse(term, "nearSynonyms", env),
     ]);
 
   const ecdict = settledValue(ecdictResult);
   const freeDictionary = settledValue(freeDictionaryResult);
-  const synonyms = settledValue(synonymsResult) ?? [];
-  const nearSynonyms = settledValue(nearSynonymsResult) ?? [];
   const firstFreeEntry = Array.isArray(freeDictionary) ? freeDictionary[0] : null;
   const definitions = extractDefinitions(firstFreeEntry);
   const errors = [
     settledError("free_dictionary", freeDictionaryResult),
-    settledError("datamuse_synonyms", synonymsResult),
-    settledError("datamuse_near_synonyms", nearSynonymsResult),
   ].filter(Boolean);
 
   let googleTranslation = null;
@@ -189,8 +182,6 @@ async function lookupWord(rawTerm, env, options = {}) {
     definitions,
     googleTranslation,
     exampleTranslations,
-    synonyms,
-    nearSynonyms,
     errors,
   });
 
@@ -241,8 +232,6 @@ function buildWordPayload({
   definitions,
   googleTranslation,
   exampleTranslations,
-  synonyms,
-  nearSynonyms,
   errors,
 }) {
   const firstFreeEntry = Array.isArray(freeDictionary) ? freeDictionary[0] : null;
@@ -300,13 +289,6 @@ function buildWordPayload({
   if (!examples.length) {
     missing.push("examples");
   }
-  if (!synonyms.length) {
-    missing.push("synonyms");
-  }
-  if (!nearSynonyms.length) {
-    missing.push("nearSynonyms");
-  }
-
   const hasAnyMeaning = translations.length || englishDefinitions.length;
   const status = hasAnyMeaning
     ? missing.length
@@ -332,13 +314,13 @@ function buildWordPayload({
       translations,
       definitions: englishDefinitions,
       examples: uniqueByText(examples),
-      synonyms: uniqueStrings(synonyms).slice(0, 20),
-      nearSynonyms: uniqueStrings(nearSynonyms).slice(0, 20),
+      synonyms: [],
+      nearSynonyms: [],
       source: {
         translation: translations.length ? translations[0].source : "pending",
         definition: definitions.length ? "free_dictionary" : ecdict?.definition ? "ecdict_d1" : "pending",
-        synonyms: synonyms.length ? "datamuse" : "pending",
-        nearSynonyms: nearSynonyms.length ? "datamuse" : "pending",
+        synonyms: "not_supported",
+        nearSynonyms: "not_supported",
       },
     },
   };
@@ -607,10 +589,35 @@ async function readWordCache(db, term) {
   }
 
   try {
-    return JSON.parse(row.payload_json);
+    return stripUnsupportedRelatedWords(JSON.parse(row.payload_json));
   } catch {
     return null;
   }
+}
+
+function stripUnsupportedRelatedWords(payload) {
+  if (!payload || typeof payload !== "object") {
+    return payload;
+  }
+
+  if (payload.entry && typeof payload.entry === "object") {
+    payload.entry.synonyms = [];
+    payload.entry.nearSynonyms = [];
+    payload.entry.source = {
+      ...(payload.entry.source ?? {}),
+      synonyms: "not_supported",
+      nearSynonyms: "not_supported",
+    };
+  }
+
+  if (Array.isArray(payload.missing)) {
+    payload.missing = payload.missing.filter((item) => item !== "synonyms" && item !== "nearSynonyms");
+    if (payload.status === "partial" && payload.missing.length === 0) {
+      payload.status = "complete";
+    }
+  }
+
+  return payload;
 }
 
 async function writeWordCache(db, payload, env) {
@@ -678,35 +685,6 @@ async function fetchFreeDictionary(term) {
   }
 
   return response.json();
-}
-
-async function fetchDatamuse(term, type, env) {
-  const params = new URLSearchParams();
-
-  if (type === "synonyms") {
-    params.set("rel_syn", term);
-  } else {
-    params.set("ml", term);
-  }
-
-  params.set("max", "20");
-
-  if (env.DATAMUSE_API_KEY) {
-    params.set("key", env.DATAMUSE_API_KEY);
-  }
-
-  const response = await fetchWithTimeout(`${DATAMUSE_BASE_URL}?${params.toString()}`);
-
-  if (!response.ok) {
-    throw new Error(`Datamuse returned ${response.status}.`);
-  }
-
-  const data = await response.json();
-  return Array.isArray(data)
-    ? data
-        .map((item) => item.word)
-        .filter((word) => typeof word === "string" && word.trim())
-    : [];
 }
 
 async function fetchWithTimeout(url, init = {}) {

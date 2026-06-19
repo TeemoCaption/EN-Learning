@@ -173,7 +173,7 @@ public class MainActivity extends Activity {
                 R.drawable.ic_book,
                 "單字",
                 "搜尋、匯入、收藏",
-                "查中文意思、音標、例句、同義字與近義字。",
+                "查中文意思、音標與例句。",
                 0xFFE0F7EF,
                 COLOR_MINT_DARK,
                 v -> showVocabularyHome()), fullWidth());
@@ -182,7 +182,7 @@ public class MainActivity extends Activity {
     private void showVocabularyHome() {
         resetContent();
         addMonsterPanel("今天想學什麼單字？",
-                "可以手動搜尋，也可以匯入文件。小羊駝會整理中文意思、音標、例句、同義字、近義字，還能朗讀英文。");
+                "可以手動搜尋，也可以匯入文件。小羊駝會整理中文意思、音標、例句，還能朗讀英文。");
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -306,7 +306,7 @@ public class MainActivity extends Activity {
         addHeading("匯入文件");
         addBody("支援 txt、csv、docx 與可選取文字的 pdf。掃描型 PDF 第一階段會提示不支援圖片文字辨識。");
         content.addView(primaryButton("選擇文件", R.drawable.ic_import, v -> openDocumentPicker()), fullWidth());
-        addBody("匯入後會先抽出英文單字、去重，再逐字網路查詢中文意思、音標、例句、同義字與近義字。");
+        addBody("匯入後會先抽出英文單字、去重，再逐字網路查詢中文意思、音標與例句。");
     }
 
     private void openDocumentPicker() {

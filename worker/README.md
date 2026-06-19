@@ -7,8 +7,7 @@
 - `GET /word?term=expand`：查詢單字。
 - `GET /translation-usage`：查看本月 Google 翻譯字元用量。
 - `POST /batch-words`：批次查詢單字，給文件匯入後補資料使用。
-- 整合 Free Dictionary API，補英文定義、例句、音標與部分同義字資料。
-- 整合 Datamuse API，補同義字、近義字與相關字。
+- 整合 Free Dictionary API，補英文定義、例句與音標。
 - 整合 Google Cloud Translation API，補中文意思與最多前三句例句中文翻譯。
 - 使用 D1 快取 Google 翻譯結果；同一個單字或同一句例句翻譯過後，不會重複呼叫 Google。
 - 使用 D1 記錄 Google 翻譯每月字元用量，預設達 450,000 字元就停止呼叫，保留 50,000 字元緩衝。
@@ -47,8 +46,8 @@
     "source": {
       "translation": "pending",
       "definition": "free_dictionary",
-      "synonyms": "datamuse",
-      "nearSynonyms": "datamuse"
+      "synonyms": "not_supported",
+      "nearSynonyms": "not_supported"
     }
   }
 }
@@ -56,7 +55,7 @@
 
 `status` 說明：
 
-- `complete`：中文意思、音標、定義、例句、同義字與近義字都有資料。
+- `complete`：中文意思、音標、定義與例句都有資料。
 - `partial`：至少有部分可用資料，但仍有缺漏欄位。
 - `pending`：目前沒有可顯示的意思或定義，安卓端可加入待補資料。
 - `invalid`：輸入不是有效英文單字。

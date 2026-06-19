@@ -21,6 +21,7 @@ import java.util.List;
 public class WordApiClient {
     private static final int CONNECT_TIMEOUT_MS = 8000;
     private static final int READ_TIMEOUT_MS = 12000;
+    private static final String GOOGLE_TRANSLATE_SOURCE = "google_cloud_translation";
 
     public WordEntry lookup(String word) throws IOException, JSONException {
         String baseUrl = BuildConfig.WORD_API_BASE_URL == null ? "" : BuildConfig.WORD_API_BASE_URL.trim();
@@ -44,7 +45,7 @@ public class WordApiClient {
 
     private WordEntry lookupFromPublicApis(String word) throws IOException, JSONException {
         WordEntry entry = new WordEntry(word);
-        entry.source = "Free Dictionary / Datamuse";
+        entry.source = "Free Dictionary";
 
         boolean dictionaryOk = false;
         try {
@@ -53,18 +54,6 @@ public class WordApiClient {
             dictionaryOk = true;
         } catch (IOException | JSONException ignored) {
             dictionaryOk = false;
-        }
-
-        try {
-            entry.synonyms = WordEntry.cleanList(readDatamuse("rel_syn", word), 10);
-        } catch (IOException | JSONException ignored) {
-            entry.synonyms = WordEntry.cleanList(entry.synonyms, 10);
-        }
-
-        try {
-            entry.relatedWords = WordEntry.cleanList(readDatamuse("ml", word), 10);
-        } catch (IOException | JSONException ignored) {
-            entry.relatedWords = WordEntry.cleanList(entry.relatedWords, 10);
         }
 
         entry.partial = !dictionaryOk
@@ -99,7 +88,6 @@ public class WordApiClient {
         List<String> parts = new ArrayList<>();
         List<String> definitions = new ArrayList<>();
         List<String> examples = new ArrayList<>();
-        List<String> synonyms = new ArrayList<>();
         JSONArray meanings = first.optJSONArray("meanings");
         if (meanings != null) {
             for (int i = 0; i < meanings.length(); i++) {
@@ -107,9 +95,6 @@ public class WordApiClient {
                 if (meaning == null) continue;
                 String part = meaning.optString("partOfSpeech", "");
                 if (!part.isEmpty() && !parts.contains(part)) parts.add(part);
-
-                JSONArray meaningSynonyms = meaning.optJSONArray("synonyms");
-                addStrings(synonyms, meaningSynonyms, 10);
 
                 JSONArray defs = meaning.optJSONArray("definitions");
                 if (defs == null) continue;
@@ -120,7 +105,6 @@ public class WordApiClient {
                     if (!definition.isEmpty() && definitions.size() < 3) definitions.add(definition);
                     String example = def.optString("example", "");
                     if (!example.isEmpty() && examples.size() < 3) examples.add(example);
-                    addStrings(synonyms, def.optJSONArray("synonyms"), 10);
                 }
             }
         }
@@ -128,20 +112,6 @@ public class WordApiClient {
         entry.partOfSpeech = join(parts);
         entry.englishDefinition = join(definitions);
         entry.examples = WordEntry.cleanList(examples, 3);
-        if (entry.synonyms.isEmpty()) entry.synonyms = WordEntry.cleanList(synonyms, 10);
-    }
-
-    private List<String> readDatamuse(String relation, String word) throws IOException, JSONException {
-        String json = get("https://api.datamuse.com/words?" + relation + "=" + encode(word) + "&max=10");
-        JSONArray array = new JSONArray(json);
-        List<String> values = new ArrayList<>();
-        for (int i = 0; i < array.length(); i++) {
-            JSONObject object = array.optJSONObject(i);
-            if (object == null) continue;
-            String value = object.optString("word", "");
-            if (!value.isEmpty()) values.add(value);
-        }
-        return values;
     }
 
     private static String shortenChineseMeaning(String text) {
@@ -167,8 +137,6 @@ public class WordApiClient {
         entry.englishDefinition = object.optString("englishDefinition", "");
         entry.examples = readStringArray(object, "examples", 3);
         entry.exampleTranslations = readStringArray(object, "exampleTranslations", 3);
-        entry.synonyms = readStringArray(object, "synonyms", 10);
-        entry.relatedWords = readStringArray(object, "relatedWords", 10);
         entry.partial = object.optBoolean("partial", false);
         return entry;
     }
@@ -182,10 +150,21 @@ public class WordApiClient {
         entry.partOfSpeech = join(readStringArray(object, "partsOfSpeech", 4));
         entry.englishDefinition = join(readObjectTextArray(object, "definitions", "definition", 3));
         readBackendExamples(object, entry);
-        entry.synonyms = readStringArray(object, "synonyms", 10);
-        entry.relatedWords = readStringArray(object, "nearSynonyms", 10);
+        if (isGoogleRelatedWordsSource(object, "synonyms")) {
+            entry.synonyms = readStringArray(object, "synonyms", 10);
+        }
+        if (isGoogleRelatedWordsSource(object, "nearSynonyms")) {
+            entry.relatedWords = readStringArray(object, "nearSynonyms", 10);
+        }
         entry.partial = isBackendPending(response);
         return entry;
+    }
+
+    private boolean isGoogleRelatedWordsSource(JSONObject object, String key) {
+        JSONObject source = object.optJSONObject("source");
+        if (source == null) return false;
+        String value = source.optString(key, "");
+        return GOOGLE_TRANSLATE_SOURCE.equals(value) || (GOOGLE_TRANSLATE_SOURCE + "_cache").equals(value);
     }
 
     private void readBackendExamples(JSONObject object, WordEntry entry) {
@@ -271,14 +250,6 @@ public class WordApiClient {
         String text = object.optString(key, "");
         if (!text.trim().isEmpty()) values.add(text.trim());
         return values;
-    }
-
-    private static void addStrings(List<String> out, JSONArray array, int maxItems) {
-        if (array == null) return;
-        for (int i = 0; i < array.length() && out.size() < maxItems; i++) {
-            String value = array.optString(i, "");
-            if (!value.isEmpty() && !out.contains(value)) out.add(value);
-        }
     }
 
     private static String get(String url) throws IOException {

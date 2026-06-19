@@ -11,7 +11,7 @@ import java.util.List;
 
 public class AppDatabase extends SQLiteOpenHelper {
     private static final String DB_NAME = "en_learning.db";
-    private static final int DB_VERSION = 2;
+    private static final int DB_VERSION = 3;
 
     public AppDatabase(Context context) {
         super(context, DB_NAME, null, DB_VERSION);
@@ -69,6 +69,9 @@ public class AppDatabase extends SQLiteOpenHelper {
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
         if (oldVersion < 2) {
             db.execSQL("ALTER TABLE word_entries ADD COLUMN example_translations TEXT DEFAULT ''");
+        }
+        if (oldVersion < 3) {
+            db.execSQL("UPDATE word_entries SET synonyms = '', related_words = ''");
             return;
         }
         db.execSQL("DROP TABLE IF EXISTS word_entries");
@@ -285,8 +288,8 @@ public class AppDatabase extends SQLiteOpenHelper {
         merged.englishDefinition = firstNonBlank(newEntry.englishDefinition, oldEntry.englishDefinition);
         merged.examples = mergeLists(oldEntry.examples, newEntry.examples, 5);
         merged.exampleTranslations = mergeLists(oldEntry.exampleTranslations, newEntry.exampleTranslations, 5);
-        merged.synonyms = mergeLists(oldEntry.synonyms, newEntry.synonyms, 12);
-        merged.relatedWords = mergeLists(oldEntry.relatedWords, newEntry.relatedWords, 12);
+        merged.synonyms = WordEntry.cleanList(newEntry.synonyms, 12);
+        merged.relatedWords = WordEntry.cleanList(newEntry.relatedWords, 12);
         merged.source = firstNonBlank(newEntry.source, oldEntry.source);
         merged.updatedAt = Math.max(oldEntry.updatedAt, newEntry.updatedAt);
         merged.partial = newEntry.partial && !oldEntry.hasDisplayableData();
