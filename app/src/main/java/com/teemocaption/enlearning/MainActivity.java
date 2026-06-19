@@ -45,6 +45,7 @@ public class MainActivity extends Activity {
     private static final int COLOR_MUTED = 0xFF667085;
     private static final int COLOR_MINT = 0xFF6EE7B7;
     private static final int COLOR_MINT_DARK = 0xFF047857;
+    private static final int COLOR_TEAL = 0xFF18B7C9;
     private static final int COLOR_CORAL = 0xFFFF7A59;
     private static final int COLOR_LEMON = 0xFFFFF1A8;
     private static final int COLOR_LILAC = 0xFFE9D5FF;
@@ -213,39 +214,12 @@ public class MainActivity extends Activity {
     private void showWordDetail(WordEntry entry) {
         resetContent();
         if (entry == null) {
-        addHeading("怪獸還沒找到");
-        addBody("目前無法取得這個單字，已保留到待補清單。");
+            addHeading("怪獸還沒找到");
+            addBody("目前無法取得這個單字，已保留到待補清單。");
             return;
         }
 
-        LinearLayout titleRow = new LinearLayout(this);
-        titleRow.setOrientation(LinearLayout.HORIZONTAL);
-        titleRow.setGravity(Gravity.CENTER_VERTICAL);
-
-        TextView word = new TextView(this);
-        word.setText(entry.word);
-        word.setTextColor(COLOR_INK);
-        word.setTextSize(TypedValue.COMPLEX_UNIT_SP, 30);
-        word.setTypeface(Typeface.DEFAULT_BOLD);
-        word.setGravity(Gravity.CENTER_VERTICAL);
-        titleRow.addView(word, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        ImageButton speak = iconButton("發音", v -> speechController.speak(entry.word));
-        LinearLayout.LayoutParams speakParams = new LinearLayout.LayoutParams(dp(58), dp(48));
-        titleRow.addView(speak, speakParams);
-        content.addView(titleRow, fullWidth());
-
-        if (entry.fromCache) addBadge("目前顯示本機快取或待補資料");
-        if (entry.partial) addBadge("部分欄位尚未補齊，可稍後從待補清單重新查詢");
-
-        addField("音標", entry.phonetic);
-        addField("詞性", entry.partOfSpeech);
-        addField("中文意思", entry.chineseMeaning);
-        addField("英文釋義", entry.englishDefinition);
-        addListField("例句", entry.examples, true);
-        addListField("同義字", entry.synonyms, false);
-        addListField("近義字", entry.relatedWords, false);
-        addField("資料來源", entry.source);
+        addWordStudyCard(entry);
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -259,6 +233,8 @@ public class MainActivity extends Activity {
 
         UserWord userWord = database.getUserWord(entry.word);
         if (userWord != null) addFamiliarityControls(entry.word, userWord.familiarity);
+        addListField("同義字", entry.synonyms, false);
+        addListField("近義字", entry.relatedWords, false);
     }
 
     private void addFamiliarityControls(String word, int familiarity) {
@@ -510,6 +486,173 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void addWordStudyCard(WordEntry entry) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(18), dp(14), dp(18), dp(18));
+        card.setMinimumHeight(dp(520));
+        card.setBackground(makeBg(COLOR_SURFACE, 0xFFF1E2CC, 8));
+        card.setElevation(dp(2));
+
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView report = new TextView(this);
+        report.setText("回報");
+        report.setTextColor(0xFFB8B8B8);
+        report.setTypeface(Typeface.DEFAULT_BOLD);
+        report.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        top.addView(report, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        if (entry.partial) {
+            TextView warn = detailPill("待補", 0xFFFFF7D6, 0xFFEAB308, 0xFF92400E);
+            top.addView(warn);
+        }
+
+        ImageButton favorite = roundIconButton(R.drawable.ic_heart, "加入收藏", 0xFFE83E65, 0xFFE83E65, v -> {
+            repository.addToBook(entry, "manual", "手動搜尋");
+            Toast.makeText(this, "已加入收藏。", Toast.LENGTH_SHORT).show();
+        });
+        favorite.setColorFilter(Color.WHITE);
+        LinearLayout.LayoutParams favoriteParams = new LinearLayout.LayoutParams(dp(42), dp(42));
+        favoriteParams.setMargins(dp(8), 0, 0, 0);
+        top.addView(favorite, favoriteParams);
+        card.addView(top, fullWidthNoMargin());
+
+        LinearLayout wordRow = new LinearLayout(this);
+        wordRow.setOrientation(LinearLayout.HORIZONTAL);
+        wordRow.setGravity(Gravity.CENTER_VERTICAL);
+        wordRow.setPadding(0, dp(58), 0, 0);
+
+        LinearLayout mainText = new LinearLayout(this);
+        mainText.setOrientation(LinearLayout.VERTICAL);
+        TextView word = new TextView(this);
+        word.setText(entry.word);
+        word.setTextColor(COLOR_TEAL);
+        word.setTextSize(TypedValue.COMPLEX_UNIT_SP, 30);
+        word.setTypeface(Typeface.DEFAULT_BOLD);
+        mainText.addView(word);
+
+        if (!isBlank(entry.phonetic)) {
+            TextView phonetic = new TextView(this);
+            phonetic.setText(entry.phonetic);
+            phonetic.setTextColor(0xFF8A8A8A);
+            phonetic.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+            phonetic.setPadding(0, dp(4), 0, dp(8));
+            mainText.addView(phonetic);
+        }
+        wordRow.addView(mainText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        ImageButton speak = lightIconButton("發音", v -> speechController.speak(entry.word));
+        wordRow.addView(speak, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        card.addView(wordRow, fullWidthNoMargin());
+
+        addMeaningRows(card, entry);
+
+        if (entry.examples != null && !entry.examples.isEmpty()) {
+            addExampleCard(card, entry.examples.get(0));
+        } else if (!isBlank(entry.englishDefinition)) {
+            addDefinitionCard(card, firstDefinitionText(entry.englishDefinition));
+        }
+
+        TextView footer = new TextView(this);
+        footer.setText("來源：" + (isBlank(entry.source) ? "網路字典" : entry.source));
+        footer.setTextColor(0xFFB8B8B8);
+        footer.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        footer.setPadding(dp(8), dp(42), 0, 0);
+        card.addView(footer, fullWidthNoMargin());
+
+        content.addView(card, fullWidth());
+
+        if (entry.fromCache) addBadge("目前顯示本機快取或待補資料");
+    }
+
+    private void addMeaningRows(LinearLayout parent, WordEntry entry) {
+        List<String> parts = splitPartOfSpeech(entry.partOfSpeech);
+        String meaning = isBlank(entry.chineseMeaning) ? "待補中文意思" : entry.chineseMeaning.trim();
+        if (parts.isEmpty()) {
+            parent.addView(meaningRow("義", meaning), compactFullWidth());
+            return;
+        }
+        for (String part : parts) {
+            parent.addView(meaningRow(partLabel(part), meaning), compactFullWidth());
+        }
+    }
+
+    private LinearLayout meaningRow(String part, String meaning) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(4), 0, dp(2));
+
+        TextView partView = new TextView(this);
+        partView.setText(part);
+        partView.setGravity(Gravity.CENTER);
+        partView.setTextColor(0xFF8A8A8A);
+        partView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        partView.setBackground(makeBg(0x00FFFFFF, 0xFFCFCFCF, 8));
+        row.addView(partView, new LinearLayout.LayoutParams(dp(54), dp(36)));
+
+        TextView meaningView = new TextView(this);
+        meaningView.setText(meaning);
+        meaningView.setTextColor(0xFF4B5563);
+        meaningView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        meaningView.setTypeface(Typeface.DEFAULT_BOLD);
+        meaningView.setPadding(dp(12), 0, dp(8), 0);
+        row.addView(meaningView, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        return row;
+    }
+
+    private void addExampleCard(LinearLayout parent, String example) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(12), dp(12), dp(10), dp(12));
+        card.setBackground(makeBg(0xFFFAFAFA, 0xFFE5E7EB, 8));
+
+        TextView exampleView = new TextView(this);
+        exampleView.setText(example);
+        exampleView.setTextColor(0xFF4B5563);
+        exampleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        exampleView.setLineSpacing(0, 1.18f);
+        card.addView(exampleView, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        ImageButton speak = lightIconButton("朗讀例句", v -> speechController.speak(example));
+        card.addView(speak, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
+        LinearLayout.LayoutParams params = fullWidthNoMargin();
+        params.setMargins(0, dp(14), 0, dp(8));
+        parent.addView(card, params);
+    }
+
+    private void addDefinitionCard(LinearLayout parent, String definition) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(12), dp(12), dp(12), dp(12));
+        card.setBackground(makeBg(0xFFFAFAFA, 0xFFE5E7EB, 8));
+
+        TextView label = new TextView(this);
+        label.setText("英文釋義");
+        label.setTextColor(0xFF9CA3AF);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        label.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(label);
+
+        TextView definitionView = new TextView(this);
+        definitionView.setText(definition);
+        definitionView.setTextColor(0xFF4B5563);
+        definitionView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        definitionView.setLineSpacing(0, 1.18f);
+        definitionView.setPadding(0, dp(6), 0, 0);
+        card.addView(definitionView);
+
+        LinearLayout.LayoutParams params = fullWidthNoMargin();
+        params.setMargins(0, dp(14), 0, dp(8));
+        parent.addView(card, params);
+    }
+
     private LinearLayout wordRow(String title, String subtitle, View.OnClickListener listener) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -682,12 +825,20 @@ public class MainActivity extends Activity {
     }
 
     private ImageButton iconButton(String description, View.OnClickListener listener) {
+        return roundIconButton(R.drawable.ic_volume, description, COLOR_MINT, COLOR_MINT_DARK, listener);
+    }
+
+    private ImageButton lightIconButton(String description, View.OnClickListener listener) {
+        return roundIconButton(R.drawable.ic_volume, description, 0xFFF1F3F5, 0xFFE5E7EB, listener);
+    }
+
+    private ImageButton roundIconButton(int iconRes, String description, int color, int strokeColor, View.OnClickListener listener) {
         ImageButton button = new ImageButton(this);
-        button.setImageResource(R.drawable.ic_volume);
+        button.setImageResource(iconRes);
         button.setContentDescription(description);
-        button.setBackground(makeBg(COLOR_MINT, COLOR_MINT_DARK, 8));
+        button.setBackground(makeBg(color, strokeColor, 8));
         button.setColorFilter(COLOR_INK);
-        button.setPadding(dp(12), dp(10), dp(12), dp(10));
+        button.setPadding(dp(10), dp(10), dp(10), dp(10));
         button.setOnClickListener(listener);
         return button;
     }
@@ -737,11 +888,72 @@ public class MainActivity extends Activity {
         return drawable;
     }
 
+    private TextView detailPill(String text, int color, int strokeColor, int textColor) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(textColor);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(dp(10), dp(6), dp(10), dp(6));
+        view.setBackground(makeBg(color, strokeColor, 8));
+        return view;
+    }
+
+    private List<String> splitPartOfSpeech(String partOfSpeech) {
+        java.util.ArrayList<String> values = new java.util.ArrayList<>();
+        if (isBlank(partOfSpeech)) return values;
+        String[] pieces = partOfSpeech.split("[,;/]+|\\band\\b");
+        for (String piece : pieces) {
+            String value = piece == null ? "" : piece.trim();
+            if (!value.isEmpty() && !values.contains(value)) values.add(value);
+            if (values.size() >= 3) break;
+        }
+        return values;
+    }
+
+    private String partLabel(String part) {
+        String lower = part == null ? "" : part.trim().toLowerCase();
+        if (lower.startsWith("noun")) return "n.";
+        if (lower.startsWith("verb")) return "v.";
+        if (lower.startsWith("adjective")) return "adj.";
+        if (lower.startsWith("adverb")) return "adv.";
+        if (lower.startsWith("pronoun")) return "pron.";
+        if (lower.startsWith("preposition")) return "prep.";
+        if (lower.startsWith("conjunction")) return "conj.";
+        if (lower.startsWith("interjection")) return "int.";
+        return part == null || part.trim().isEmpty() ? "義" : part.trim();
+    }
+
+    private String firstDefinitionText(String text) {
+        if (isBlank(text)) return "";
+        String cleaned = text.trim();
+        String[] pieces = cleaned.split("[.;]");
+        if (pieces.length == 0 || isBlank(pieces[0])) return cleaned;
+        return pieces[0].trim() + ".";
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
     private LinearLayout.LayoutParams fullWidth() {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
         params.setMargins(0, dp(4), 0, dp(8));
+        return params;
+    }
+
+    private LinearLayout.LayoutParams fullWidthNoMargin() {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+    }
+
+    private LinearLayout.LayoutParams compactFullWidth() {
+        LinearLayout.LayoutParams params = fullWidthNoMargin();
+        params.setMargins(0, dp(2), 0, dp(2));
         return params;
     }
 
