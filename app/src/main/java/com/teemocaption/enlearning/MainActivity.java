@@ -14,6 +14,7 @@ import android.text.InputType;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -34,6 +35,7 @@ import com.teemocaption.enlearning.net.WordApiClient;
 import com.teemocaption.enlearning.util.SpeechController;
 import com.teemocaption.enlearning.util.WordNormalizer;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -60,6 +62,12 @@ public class MainActivity extends Activity {
     private ExecutorService executor;
     private Handler mainHandler;
     private LinearLayout content;
+    private List<WordEntry> bookSwipeEntries = new ArrayList<>();
+    private int bookSwipeIndex = -1;
+    private View activeBookSwipeCard;
+    private float bookSwipeStartX;
+    private float bookSwipeStartY;
+    private boolean bookSwipeTracking;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -80,6 +88,12 @@ public class MainActivity extends Activity {
         if (speechController != null) speechController.shutdown();
         if (executor != null) executor.shutdownNow();
         if (database != null) database.close();
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (handleBookSwipe(event)) return true;
+        return super.dispatchTouchEvent(event);
     }
 
     @Override
@@ -271,6 +285,21 @@ public class MainActivity extends Activity {
     }
 
     private void showWordDetail(WordEntry entry) {
+        clearBookSwipeContext();
+        renderWordDetail(entry);
+    }
+
+    private void showBookWordDetail(List<WordEntry> words, int index) {
+        if (words == null || words.isEmpty()) {
+            showWordDetail(null);
+            return;
+        }
+        bookSwipeEntries = new ArrayList<>(words);
+        bookSwipeIndex = Math.max(0, Math.min(index, bookSwipeEntries.size() - 1));
+        renderWordDetail(bookSwipeEntries.get(bookSwipeIndex));
+    }
+
+    private void renderWordDetail(WordEntry entry) {
         resetContent();
         if (entry == null) {
             addHeading("小羊駝還沒找到");
@@ -286,17 +315,103 @@ public class MainActivity extends Activity {
         addClickableWordListField("近義字", entry.relatedWords);
     }
 
+    private void refreshWordDetail(String word) {
+        WordEntry updated = database.getWord(word);
+        if (hasBookSwipeContext() && isCurrentBookWord(word)) {
+            if (updated != null) bookSwipeEntries.set(bookSwipeIndex, updated);
+            renderWordDetail(updated);
+            return;
+        }
+        showWordDetail(updated);
+    }
+
+    private void clearBookSwipeContext() {
+        bookSwipeEntries = new ArrayList<>();
+        bookSwipeIndex = -1;
+    }
+
+    private boolean hasBookSwipeContext() {
+        return bookSwipeEntries != null
+                && bookSwipeEntries.size() > 1
+                && bookSwipeIndex >= 0
+                && bookSwipeIndex < bookSwipeEntries.size();
+    }
+
+    private boolean isCurrentBookWord(String word) {
+        if (!hasBookSwipeContext()) return false;
+        WordEntry current = bookSwipeEntries.get(bookSwipeIndex);
+        return current != null && current.word != null && current.word.equals(word);
+    }
+
+    private void showAdjacentBookWord(int direction) {
+        if (!hasBookSwipeContext()) return;
+        int nextIndex = bookSwipeIndex + direction;
+        if (nextIndex < 0) {
+            Toast.makeText(this, "已經是第一個收藏單字。", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (nextIndex >= bookSwipeEntries.size()) {
+            Toast.makeText(this, "已經是最後一個收藏單字。", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        bookSwipeIndex = nextIndex;
+        renderWordDetail(bookSwipeEntries.get(bookSwipeIndex));
+    }
+
+    private boolean handleBookSwipe(MotionEvent event) {
+        if (!hasBookSwipeContext() || activeBookSwipeCard == null) {
+            bookSwipeTracking = false;
+            return false;
+        }
+
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                bookSwipeTracking = isTouchInsideView(event, activeBookSwipeCard);
+                bookSwipeStartX = event.getRawX();
+                bookSwipeStartY = event.getRawY();
+                return false;
+            case MotionEvent.ACTION_UP:
+                if (!bookSwipeTracking) return false;
+                bookSwipeTracking = false;
+                float deltaX = event.getRawX() - bookSwipeStartX;
+                float deltaY = event.getRawY() - bookSwipeStartY;
+                float absX = Math.abs(deltaX);
+                float absY = Math.abs(deltaY);
+                if (absX >= dp(72) && absX > absY * 1.35f) {
+                    showAdjacentBookWord(deltaX < 0 ? 1 : -1);
+                    return true;
+                }
+                return false;
+            case MotionEvent.ACTION_CANCEL:
+                bookSwipeTracking = false;
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    private boolean isTouchInsideView(MotionEvent event, View view) {
+        int[] location = new int[2];
+        view.getLocationOnScreen(location);
+        float x = event.getRawX();
+        float y = event.getRawY();
+        return x >= location[0]
+                && x <= location[0] + view.getWidth()
+                && y >= location[1]
+                && y <= location[1] + view.getHeight();
+    }
+
     private void addFamiliarityControls(String word, int familiarity) {
         addSubheading("熟悉度：" + familiarity + " / 5");
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.addView(secondaryButton("降低", v -> {
             database.updateFamiliarity(word, familiarity - 1);
-            showWordDetail(database.getWord(word));
+            refreshWordDetail(word);
         }), buttonWeight());
         row.addView(secondaryButton("提高", v -> {
             database.updateFamiliarity(word, familiarity + 1);
-            showWordDetail(database.getWord(word));
+            refreshWordDetail(word);
         }), buttonWeight());
         row.addView(dangerButton("移除", v -> {
             database.removeUserWord(word);
@@ -321,8 +436,10 @@ public class MainActivity extends Activity {
                 content.addView(secondaryButton("去匯入", R.drawable.ic_import, v -> showImport()), fullWidth());
                 return;
             }
-            for (WordEntry entry : words) {
-                content.addView(wordRow(entry.word, entry.chineseMeaning, v -> showWordDetail(entry)));
+            for (int i = 0; i < words.size(); i++) {
+                WordEntry entry = words.get(i);
+                int index = i;
+                content.addView(wordRow(entry.word, entry.chineseMeaning, v -> showBookWordDetail(words, index)));
             }
         });
     }
@@ -459,6 +576,8 @@ public class MainActivity extends Activity {
     }
 
     private void resetContent() {
+        activeBookSwipeCard = null;
+        bookSwipeTracking = false;
         content.removeAllViews();
     }
 
@@ -629,6 +748,22 @@ public class MainActivity extends Activity {
         report.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         top.addView(report, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
+        if (hasBookSwipeContext()) {
+            TextView counter = new TextView(this);
+            counter.setText((bookSwipeIndex + 1) + " / " + bookSwipeEntries.size());
+            counter.setTextColor(COLOR_MUTED);
+            counter.setTypeface(Typeface.DEFAULT_BOLD);
+            counter.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            counter.setGravity(Gravity.CENTER);
+            counter.setPadding(dp(16), dp(5), dp(16), dp(5));
+            counter.setBackground(makeBg(0xFFF3E8FF, 0xFFD8B4FE, 8));
+            LinearLayout.LayoutParams counterParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            counterParams.setMargins(0, 0, dp(8), 0);
+            top.addView(counter, counterParams);
+        }
+
         ImageButton favorite = roundIconButton(R.drawable.ic_heart, "加入收藏", 0xFFE83E65, 0xFFE83E65, v -> {
             repository.addToBook(entry, "manual", "手動搜尋");
             Toast.makeText(this, "已加入收藏。", Toast.LENGTH_SHORT).show();
@@ -674,6 +809,7 @@ public class MainActivity extends Activity {
             addExampleCard(card, example, displayExampleTranslation(entry));
         }
 
+        if (hasBookSwipeContext()) activeBookSwipeCard = card;
         content.addView(card, fullWidth());
     }
 
