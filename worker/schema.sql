@@ -1,0 +1,28 @@
+CREATE TABLE IF NOT EXISTS ecdict_words (
+  word TEXT PRIMARY KEY,
+  phonetic TEXT,
+  translation TEXT,
+  definition TEXT,
+  pos TEXT,
+  exchange TEXT,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS word_cache (
+  term TEXT PRIMARY KEY,
+  canonical_word TEXT,
+  status TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_word_cache_expires_at
+  ON word_cache (expires_at);
+
+CREATE TABLE IF NOT EXISTS lookup_failures (
+  term TEXT PRIMARY KEY,
+  reason TEXT NOT NULL,
+  last_failed_at TEXT NOT NULL,
+  retry_count INTEGER NOT NULL DEFAULT 0
+);

@@ -1,0 +1,3 @@
+# Optional. Datamuse can currently be used without a key, but the Worker
+# supports adding one later without changing Android code.
+DATAMUSE_API_KEY=

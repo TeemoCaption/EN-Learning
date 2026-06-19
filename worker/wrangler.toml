@@ -1,0 +1,14 @@
+name = "en-learning-dictionary"
+main = "src/index.js"
+compatibility_date = "2026-06-19"
+
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "en_learning_dictionary"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[vars]
+CACHE_TTL_SECONDS = "1209600"
+BATCH_LIMIT = "50"
