@@ -41,6 +41,39 @@ public class WordApiClient {
         return authenticate("auth/login", email, password);
     }
 
+    public AuthSession authenticateMember(String email, String password) throws IOException, JSONException {
+        return authenticate("auth/member", email, password);
+    }
+
+    public void requestEmailVerification(String token) throws IOException, JSONException {
+        JSONObject object = new JSONObject(request("POST", backendUrl("auth/email/request"), "{}", token));
+        if (!object.optBoolean("ok", false)) throwBackendError(object);
+    }
+
+    public boolean verifyEmail(String token, String code) throws IOException, JSONException {
+        JSONObject body = new JSONObject();
+        body.put("code", code);
+        JSONObject object = new JSONObject(request("POST", backendUrl("auth/email/verify"), body.toString(), token));
+        if (!object.optBoolean("ok", false)) throwBackendError(object);
+        return object.optBoolean("emailVerified", false);
+    }
+
+    public void requestPasswordReset(String email) throws IOException, JSONException {
+        JSONObject body = new JSONObject();
+        body.put("email", email);
+        JSONObject object = new JSONObject(request("POST", backendUrl("auth/password-reset/request"), body.toString(), null));
+        if (!object.optBoolean("ok", false)) throwBackendError(object);
+    }
+
+    public void confirmPasswordReset(String email, String code, String password) throws IOException, JSONException {
+        JSONObject body = new JSONObject();
+        body.put("email", email);
+        body.put("code", code);
+        body.put("password", password);
+        JSONObject object = new JSONObject(request("POST", backendUrl("auth/password-reset/confirm"), body.toString(), null));
+        if (!object.optBoolean("ok", false)) throwBackendError(object);
+    }
+
     public List<WordEntry> getBook(String token) throws IOException, JSONException {
         JSONObject object = new JSONObject(request("GET", backendUrl("book"), null, token));
         if (!object.optBoolean("ok", false)) throwBackendError(object);
@@ -99,6 +132,9 @@ public class WordApiClient {
         session.token = object.optString("token", "");
         session.email = user == null ? email : user.optString("email", email);
         session.expiresAt = object.optString("expiresAt", "");
+        session.created = object.optBoolean("created", false);
+        session.emailVerified = object.optBoolean("emailVerified",
+                user != null && user.optBoolean("emailVerified", false));
         if (session.token.trim().isEmpty()) throw new IOException("Backend did not return an auth token.");
         return session;
     }

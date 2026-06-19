@@ -89,6 +89,30 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id
   ON auth_sessions (user_id);
 
+CREATE TABLE IF NOT EXISTS verified_emails (
+  email TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  verified_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_verified_emails_user
+  ON verified_emails (user_id);
+
+CREATE TABLE IF NOT EXISTS auth_email_codes (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  code_salt TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  consumed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_email_codes_lookup
+  ON auth_email_codes (email, purpose, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS cloud_user_words (
   user_id TEXT NOT NULL,
   word TEXT NOT NULL,

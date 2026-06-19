@@ -8,3 +8,14 @@ GOOGLE_TRANSLATE_MONTHLY_LIMIT=450000
 
 # Number of dictionary example sentences translated to Traditional Chinese.
 GOOGLE_TRANSLATE_EXAMPLE_LIMIT=3
+
+# Free email provider for verification code and password reset.
+# Recommended free setup: brevo. Alternative: resend.
+EMAIL_PROVIDER=brevo
+EMAIL_FROM=
+EMAIL_FROM_NAME=Alpaca English
+
+# Keep real keys in worker/.dev.vars locally or Cloudflare secrets remotely.
+BREVO_API_KEY=
+RESEND_API_KEY=
+AUTH_CODE_SECRET=

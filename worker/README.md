@@ -9,6 +9,11 @@
 - `POST /batch-words`：批次查詢單字，給文件匯入後補資料使用。
 - `POST /auth/register`：會員註冊，使用信箱與密碼。
 - `POST /auth/login`：會員登入，回傳會員令牌。
+- `POST /auth/member`：同一個按鈕完成登入；信箱不存在時自動註冊。
+- `POST /auth/email/request`：登入後寄送信箱驗證碼。
+- `POST /auth/email/verify`：確認信箱驗證碼。
+- `POST /auth/password-reset/request`：寄送重設密碼驗證碼。
+- `POST /auth/password-reset/confirm`：使用驗證碼更新密碼。
 - `GET /book`：讀取登入會員的雲端收藏單字。
 - `POST /book`：把單字加入登入會員的雲端收藏。
 - `DELETE /book?word=expand`：從登入會員的雲端收藏移除單字。
@@ -21,6 +26,7 @@
 - 預留 D1 的 `ecdict_words` 表，之後可匯入 ECDICT，提供中文意思與音標備援。
 - 中文意思主要使用 Google 官方翻譯；若 Google 未設定或已達保護上限，才會使用 ECDICT 作為備援。
 - 會員收藏單字存放在 D1 的 `cloud_user_words`；安卓端不再用手機本機資料庫保存收藏快取。
+- 信箱驗證與忘記密碼使用外部免費額度寄信服務；目前支援 Brevo 與 Resend，不使用 Cloudflare 付費寄信服務。
 
 ## 回傳格式
 
@@ -133,6 +139,54 @@ npx wrangler secret put GOOGLE_TRANSLATE_API_KEY
 ```
 
 請在 Google Cloud Console 另外設定 Cloud Translation API 的用量配額與預算警示。Worker 內建的 `GOOGLE_TRANSLATE_MONTHLY_LIMIT=450000` 是第二層保護，會在達到 45 萬字元時停止呼叫 Google；`GOOGLE_TRANSLATE_EXAMPLE_LIMIT=3` 會限制每次單字查詢最多翻譯前三句例句；真正避免扣款仍建議在 Google Cloud 後台把每月配額限制在免費額度內。
+
+設定免費寄信服務：
+
+第一階段建議用 Brevo。Brevo 官方免費方案不需要信用卡，帳號審核通過後可寄送每日 300 封信；適合信箱驗證碼與忘記密碼。Resend 也可用，免費方案每日 100 封、每月 3,000 封；通常需要驗證寄件網域。
+
+在 `wrangler.toml` 先保留：
+
+```toml
+[vars]
+EMAIL_PROVIDER = "brevo"
+EMAIL_FROM_NAME = "Alpaca English"
+```
+
+到 Brevo 建立帳號後：
+
+1. 在 Brevo 後台完成寄件帳號或寄件網域設定。
+2. 到 Brevo 的 API Keys 頁面新增 API key。
+3. 在 Cloudflare Worker 設定秘密變數：
+
+```powershell
+npx wrangler secret put BREVO_API_KEY
+npx wrangler secret put AUTH_CODE_SECRET
+```
+
+`AUTH_CODE_SECRET` 可以填一串自己生成的長隨機文字，用來保護驗證碼雜湊。請不要把它寫進 git。
+
+設定寄件信箱：
+
+```powershell
+npx wrangler secret put EMAIL_FROM
+```
+
+`EMAIL_FROM` 要填 Brevo 已驗證的寄件信箱，例如 `noreply@你的網域.com`。若只是先本機開發，可把這些值放在未提交的 `worker/.dev.vars`。
+
+如果要改用 Resend：
+
+```toml
+[vars]
+EMAIL_PROVIDER = "resend"
+```
+
+並設定：
+
+```powershell
+npx wrangler secret put RESEND_API_KEY
+npx wrangler secret put EMAIL_FROM
+npx wrangler secret put AUTH_CODE_SECRET
+```
 
 部署：
 

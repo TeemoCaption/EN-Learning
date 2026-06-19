@@ -51,6 +51,7 @@ public class MainActivity extends Activity {
     private static final String PREF_TOKEN = "token";
     private static final String PREF_EMAIL = "email";
     private static final String PREF_EXPIRES_AT = "expires_at";
+    private static final String PREF_EMAIL_VERIFIED = "email_verified";
     private static final int COLOR_BG = 0xFFF7F3EA;
     private static final int COLOR_SURFACE = 0xFFFFFFFF;
     private static final int COLOR_INK = 0xFF253247;
@@ -81,6 +82,7 @@ public class MainActivity extends Activity {
     private String authToken = "";
     private String authEmail = "";
     private String authExpiresAt = "";
+    private boolean authEmailVerified = false;
     private final Set<String> cloudFavoriteWords = new HashSet<>();
 
     @Override
@@ -126,17 +128,28 @@ public class MainActivity extends Activity {
         authToken = prefs.getString(PREF_TOKEN, "");
         authEmail = prefs.getString(PREF_EMAIL, "");
         authExpiresAt = prefs.getString(PREF_EXPIRES_AT, "");
+        authEmailVerified = prefs.getBoolean(PREF_EMAIL_VERIFIED, false);
     }
 
     private void saveAuthSession(AuthSession session) {
         authToken = session == null ? "" : safeString(session.token);
         authEmail = session == null ? "" : safeString(session.email);
         authExpiresAt = session == null ? "" : safeString(session.expiresAt);
+        authEmailVerified = session != null && session.emailVerified;
         getSharedPreferences(PREFS_AUTH, MODE_PRIVATE)
                 .edit()
                 .putString(PREF_TOKEN, authToken)
                 .putString(PREF_EMAIL, authEmail)
                 .putString(PREF_EXPIRES_AT, authExpiresAt)
+                .putBoolean(PREF_EMAIL_VERIFIED, authEmailVerified)
+                .apply();
+    }
+
+    private void saveEmailVerified(boolean verified) {
+        authEmailVerified = verified;
+        getSharedPreferences(PREFS_AUTH, MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREF_EMAIL_VERIFIED, verified)
                 .apply();
     }
 
@@ -144,6 +157,7 @@ public class MainActivity extends Activity {
         authToken = "";
         authEmail = "";
         authExpiresAt = "";
+        authEmailVerified = false;
         cloudFavoriteWords.clear();
         getSharedPreferences(PREFS_AUTH, MODE_PRIVATE).edit().clear().apply();
     }
@@ -328,7 +342,7 @@ public class MainActivity extends Activity {
     private void showMemberLogin(String errorMessage, String initialEmail) {
         resetContent();
         addHeading("會員登入");
-        addBody("登入後，收藏單字會存到雲端資料庫；這台手機不再保存本機收藏快取。");
+        addBody("輸入信箱與密碼即可繼續；已有帳號會登入，沒有帳號會自動建立。收藏單字會存到雲端資料庫。");
         if (!isBlank(errorMessage)) {
             addErrorMessage(errorMessage);
         }
@@ -356,18 +370,23 @@ public class MainActivity extends Activity {
         password.setBackground(makeBg(COLOR_SURFACE, COLOR_MINT, 8));
         content.addView(password, fullWidth());
 
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.addView(primaryButton("登入", R.drawable.ic_book,
-                v -> authenticateMember(false, email, password)),
-                buttonWeight());
-        row.addView(secondaryButton("註冊", R.drawable.ic_import,
-                v -> authenticateMember(true, email, password)),
-                buttonWeight());
-        content.addView(row, fullWidth());
+        content.addView(primaryButton("登入 / 註冊", R.drawable.ic_book,
+                v -> authenticateMember(email, password)), fullWidth());
+
+        TextView forgot = new TextView(this);
+        forgot.setText("忘記密碼？點這裡重設");
+        forgot.setTextColor(COLOR_TEAL);
+        forgot.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        forgot.setTypeface(Typeface.DEFAULT_BOLD);
+        forgot.setGravity(Gravity.CENTER);
+        forgot.setPadding(0, dp(8), 0, dp(8));
+        forgot.setClickable(true);
+        forgot.setFocusable(true);
+        forgot.setOnClickListener(v -> showPasswordReset("", email.getText().toString()));
+        content.addView(forgot, fullWidth());
     }
 
-    private void authenticateMember(boolean register, EditText emailInput, EditText passwordInput) {
+    private void authenticateMember(EditText emailInput, EditText passwordInput) {
         String email = emailInput.getText().toString().trim().toLowerCase(Locale.US);
         String password = passwordInput.getText().toString();
         if (!isValidEmail(email)) {
@@ -380,18 +399,197 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "密碼至少需要 8 個字元。", Toast.LENGTH_LONG).show();
             return;
         }
-        String action = register ? "註冊" : "登入";
-        showLoading(action + "中，正在連線到雲端會員服務。");
+        showLoading("會員驗證中，正在連線到雲端會員服務。");
         runBackground(
-                () -> register
-                        ? wordApiClient.register(email, password)
-                        : wordApiClient.login(email, password),
+                () -> wordApiClient.authenticateMember(email, password),
                 session -> {
                     saveAuthSession(session);
-                    Toast.makeText(this, action + "成功。", Toast.LENGTH_SHORT).show();
-                    showBook();
+                    Toast.makeText(this,
+                            session.created ? "已建立會員並登入。" : "已登入會員。",
+                            Toast.LENGTH_SHORT).show();
+                    if (session.emailVerified) {
+                        showBook();
+                    } else {
+                        showEmailVerification("");
+                    }
                 },
                 error -> showMemberLogin(error, email));
+    }
+
+    private void showEmailVerification(String errorMessage) {
+        if (!isLoggedIn()) {
+            showMemberLogin(errorMessage, authEmail);
+            return;
+        }
+        resetContent();
+        addHeading("信箱驗證");
+        addBody("請驗證 " + authEmail + "，完成後才能同步雲端收藏與匯入單字。");
+        if (!isBlank(errorMessage)) {
+            addErrorMessage(errorMessage);
+        }
+
+        EditText code = new EditText(this);
+        code.setSingleLine(true);
+        code.setHint("6 位數驗證碼");
+        code.setInputType(InputType.TYPE_CLASS_NUMBER);
+        code.setTextColor(COLOR_INK);
+        code.setHintTextColor(0xFF9CA3AF);
+        code.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        code.setPadding(dp(14), dp(10), dp(14), dp(10));
+        code.setBackground(makeBg(COLOR_SURFACE, COLOR_MINT, 8));
+        content.addView(code, fullWidth());
+
+        content.addView(primaryButton("寄送驗證碼", R.drawable.ic_book,
+                v -> requestEmailVerification()), fullWidth());
+        content.addView(primaryButton("完成驗證", R.drawable.ic_search,
+                v -> confirmEmailVerification(code)), fullWidth());
+        content.addView(secondaryButton("登出", v -> {
+            clearAuthSession();
+            showMemberLogin();
+        }), fullWidth());
+    }
+
+    private void requestEmailVerification() {
+        if (!isLoggedIn()) {
+            showMemberLogin();
+            return;
+        }
+        showLoading("正在寄送信箱驗證碼...");
+        runBackground(
+                () -> {
+                    wordApiClient.requestEmailVerification(authToken);
+                    return true;
+                },
+                ignored -> {
+                    Toast.makeText(this, "驗證碼已寄出，請查看信箱。", Toast.LENGTH_LONG).show();
+                    showEmailVerification("");
+                },
+                this::showEmailVerification);
+    }
+
+    private void confirmEmailVerification(EditText codeInput) {
+        String code = codeInput.getText().toString().trim();
+        if (code.replaceAll("\\D+", "").length() != 6) {
+            codeInput.setError("請輸入 6 位數驗證碼");
+            Toast.makeText(this, "請輸入 6 位數驗證碼。", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        showLoading("正在確認信箱驗證碼...");
+        runBackground(
+                () -> wordApiClient.verifyEmail(authToken, code),
+                verified -> {
+                    if (!verified) {
+                        showEmailVerification("信箱尚未完成驗證，請重新確認驗證碼。");
+                        return;
+                    }
+                    saveEmailVerified(verified);
+                    Toast.makeText(this, "信箱已完成驗證。", Toast.LENGTH_SHORT).show();
+                    showBook();
+                },
+                this::showEmailVerification);
+    }
+
+    private void showPasswordReset(String errorMessage, String initialEmail) {
+        resetContent();
+        addHeading("忘記密碼");
+        addBody("輸入註冊信箱後先寄送重設碼，再用重設碼設定新密碼。");
+        if (!isBlank(errorMessage)) {
+            addErrorMessage(errorMessage);
+        }
+
+        EditText email = new EditText(this);
+        email.setSingleLine(true);
+        email.setHint("註冊信箱");
+        email.setText(safeString(initialEmail).trim());
+        email.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        email.setTextColor(COLOR_INK);
+        email.setHintTextColor(0xFF9CA3AF);
+        email.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        email.setPadding(dp(14), dp(10), dp(14), dp(10));
+        email.setBackground(makeBg(COLOR_SURFACE, COLOR_MINT, 8));
+        content.addView(email, fullWidth());
+
+        EditText code = new EditText(this);
+        code.setSingleLine(true);
+        code.setHint("6 位數重設碼");
+        code.setInputType(InputType.TYPE_CLASS_NUMBER);
+        code.setTextColor(COLOR_INK);
+        code.setHintTextColor(0xFF9CA3AF);
+        code.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        code.setPadding(dp(14), dp(10), dp(14), dp(10));
+        code.setBackground(makeBg(COLOR_SURFACE, COLOR_MINT, 8));
+        content.addView(code, fullWidth());
+
+        EditText password = new EditText(this);
+        password.setSingleLine(true);
+        password.setHint("新密碼，至少 8 個字元");
+        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        password.setTextColor(COLOR_INK);
+        password.setHintTextColor(0xFF9CA3AF);
+        password.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        password.setPadding(dp(14), dp(10), dp(14), dp(10));
+        password.setBackground(makeBg(COLOR_SURFACE, COLOR_MINT, 8));
+        content.addView(password, fullWidth());
+
+        content.addView(primaryButton("寄送重設碼", R.drawable.ic_book,
+                v -> requestPasswordReset(email)), fullWidth());
+        content.addView(primaryButton("更新密碼", R.drawable.ic_search,
+                v -> confirmPasswordReset(email, code, password)), fullWidth());
+        content.addView(secondaryButton("返回登入", v -> showMemberLogin("", email.getText().toString())),
+                fullWidth());
+    }
+
+    private void requestPasswordReset(EditText emailInput) {
+        String email = emailInput.getText().toString().trim().toLowerCase(Locale.US);
+        if (!isValidEmail(email)) {
+            emailInput.setError("請輸入有效的信箱");
+            Toast.makeText(this, "請輸入有效的信箱。", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        showLoading("正在寄送重設碼...");
+        runBackground(
+                () -> {
+                    wordApiClient.requestPasswordReset(email);
+                    return true;
+                },
+                ignored -> {
+                    Toast.makeText(this, "如果信箱已註冊，重設碼已寄出。", Toast.LENGTH_LONG).show();
+                    showPasswordReset("", email);
+                },
+                error -> showPasswordReset(error, email));
+    }
+
+    private void confirmPasswordReset(EditText emailInput, EditText codeInput, EditText passwordInput) {
+        String email = emailInput.getText().toString().trim().toLowerCase(Locale.US);
+        String code = codeInput.getText().toString().trim();
+        String password = passwordInput.getText().toString();
+        if (!isValidEmail(email)) {
+            emailInput.setError("請輸入有效的信箱");
+            Toast.makeText(this, "請輸入有效的信箱。", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (code.replaceAll("\\D+", "").length() != 6) {
+            codeInput.setError("請輸入 6 位數重設碼");
+            Toast.makeText(this, "請輸入 6 位數重設碼。", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (password.length() < 8) {
+            passwordInput.setError("密碼至少 8 個字元");
+            Toast.makeText(this, "新密碼至少需要 8 個字元。", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        showLoading("正在更新密碼...");
+        runBackground(
+                () -> {
+                    wordApiClient.confirmPasswordReset(email, code, password);
+                    return true;
+                },
+                ignored -> {
+                    clearAuthSession();
+                    Toast.makeText(this, "密碼已更新，請重新登入。", Toast.LENGTH_LONG).show();
+                    showMemberLogin("", email);
+                },
+                error -> showPasswordReset(error, email));
     }
 
     private void lookupAndShow(String rawWord) {
@@ -536,6 +734,10 @@ public class MainActivity extends Activity {
             showMemberLogin();
             return;
         }
+        if (!authEmailVerified) {
+            showEmailVerification("");
+            return;
+        }
         runBackground(
                 () -> {
                     wordApiClient.removeBookWord(authToken, entry.word);
@@ -563,6 +765,10 @@ public class MainActivity extends Activity {
     private void showBook() {
         if (!isLoggedIn()) {
             showMemberLogin();
+            return;
+        }
+        if (!authEmailVerified) {
+            showEmailVerification("");
             return;
         }
         resetContent();
@@ -609,6 +815,10 @@ public class MainActivity extends Activity {
             showMemberLogin();
             return;
         }
+        if (!authEmailVerified) {
+            showEmailVerification("");
+            return;
+        }
         resetContent();
         addHeading("匯入文件");
         addBody("支援 txt、csv、docx 與可選取文字的 pdf。匯入時只會抽出英文單字或片語；掃描型 PDF 第一階段會提示不支援圖片文字辨識。");
@@ -632,6 +842,10 @@ public class MainActivity extends Activity {
     private void handleImport(Uri uri) {
         if (!isLoggedIn()) {
             showMemberLogin();
+            return;
+        }
+        if (!authEmailVerified) {
+            showEmailVerification("");
             return;
         }
         resetContent();
@@ -1001,6 +1215,10 @@ public class MainActivity extends Activity {
         if (entry == null || isBlank(entry.word)) return;
         if (!isLoggedIn()) {
             showMemberLogin();
+            return;
+        }
+        if (!authEmailVerified) {
+            showEmailVerification("");
             return;
         }
 

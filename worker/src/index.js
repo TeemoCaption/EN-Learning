@@ -8,6 +8,9 @@ const DEFAULT_EXAMPLE_TRANSLATION_LIMIT = 3;
 const REQUEST_TIMEOUT_MS = 7000;
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const PASSWORD_HASH_ITERATIONS = 100000;
+const AUTH_CODE_TTL_SECONDS = 10 * 60;
+const AUTH_CODE_COOLDOWN_SECONDS = 60;
+const MAX_AUTH_CODE_ATTEMPTS = 5;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -30,6 +33,8 @@ export default {
           service: "en-learning-dictionary",
           hasDatabase: Boolean(env.DB),
           hasGoogleTranslate: Boolean(env.DB && env.GOOGLE_TRANSLATE_API_KEY),
+          emailProvider: getEmailProvider(env),
+          hasEmailSender: Boolean(env.EMAIL_FROM && (env.BREVO_API_KEY || env.RESEND_API_KEY || env.EMAIL_API_KEY)),
           googleTranslateMonthlyLimit: getGoogleTranslateMonthlyLimit(env),
           googleTranslateExampleLimit: getExampleTranslationLimit(env),
         });
@@ -49,6 +54,28 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/auth/login") {
         return jsonResponse(await handleLogin(request, env));
+      }
+
+      if (request.method === "POST" && url.pathname === "/auth/member") {
+        return jsonResponse(await handleMemberAuth(request, env));
+      }
+
+      if (request.method === "POST" && url.pathname === "/auth/email/request") {
+        const user = await requireUser(request, env);
+        return jsonResponse(await handleEmailVerificationRequest(user, env));
+      }
+
+      if (request.method === "POST" && url.pathname === "/auth/email/verify") {
+        const user = await requireUser(request, env);
+        return jsonResponse(await handleEmailVerificationConfirm(request, user, env));
+      }
+
+      if (request.method === "POST" && url.pathname === "/auth/password-reset/request") {
+        return jsonResponse(await handlePasswordResetRequest(request, env));
+      }
+
+      if (request.method === "POST" && url.pathname === "/auth/password-reset/confirm") {
+        return jsonResponse(await handlePasswordResetConfirm(request, env));
       }
 
       if (request.method === "GET" && url.pathname === "/auth/me") {
@@ -142,16 +169,77 @@ async function handleRegister(request, env) {
     throw httpError(409, "email_exists", "這個信箱已經註冊。");
   }
 
+  const user = await createUser(env.DB, email, password);
+  const session = await createSession(env.DB, user.id);
+  return {
+    ok: true,
+    user: publicUser(user),
+    emailVerified: Boolean(user.email_verified),
+    token: session.token,
+    expiresAt: session.expiresAt,
+    created: true,
+  };
+}
+
+async function handleMemberAuth(request, env) {
+  ensureDatabase(env);
+  const body = await readJson(request);
+  const email = normalizeEmail(body?.email);
+  const password = String(body?.password ?? "");
+  validateEmailAndPassword(email, password);
+
+  const existing = await env.DB
+    .prepare(
+      `SELECT u.id, u.email, u.password_hash, u.password_salt, u.created_at,
+              EXISTS(SELECT 1 FROM verified_emails v WHERE v.email = u.email) AS email_verified
+       FROM users u
+       WHERE u.email = ?
+       LIMIT 1`,
+    )
+    .bind(email)
+    .first();
+
+  if (existing) {
+    const expectedHash = await hashPassword(password, existing.password_salt);
+    if (expectedHash !== existing.password_hash) {
+      throw httpError(401, "invalid_credentials", "這個信箱已註冊，請確認密碼。");
+    }
+
+    const session = await createSession(env.DB, existing.id);
+    return {
+      ok: true,
+      user: publicUser(existing),
+      emailVerified: Boolean(existing.email_verified),
+      token: session.token,
+      expiresAt: session.expiresAt,
+      created: false,
+    };
+  }
+
+  const user = await createUser(env.DB, email, password);
+  const session = await createSession(env.DB, user.id);
+  return {
+    ok: true,
+    user: publicUser(user),
+    emailVerified: Boolean(user.email_verified),
+    token: session.token,
+    expiresAt: session.expiresAt,
+    created: true,
+  };
+}
+
+async function createUser(db, email, password) {
   const now = new Date().toISOString();
   const user = {
     id: randomHex(16),
     email,
     created_at: now,
+    email_verified: 0,
   };
   const passwordSalt = randomHex(16);
   const passwordHash = await hashPassword(password, passwordSalt);
 
-  await env.DB
+  await db
     .prepare(
       `INSERT INTO users (id, email, password_hash, password_salt, created_at)
        VALUES (?, ?, ?, ?, ?)`,
@@ -159,13 +247,7 @@ async function handleRegister(request, env) {
     .bind(user.id, user.email, passwordHash, passwordSalt, now)
     .run();
 
-  const session = await createSession(env.DB, user.id);
-  return {
-    ok: true,
-    user: publicUser(user),
-    token: session.token,
-    expiresAt: session.expiresAt,
-  };
+  return user;
 }
 
 async function handleLogin(request, env) {
@@ -179,9 +261,10 @@ async function handleLogin(request, env) {
 
   const user = await env.DB
     .prepare(
-      `SELECT id, email, password_hash, password_salt, created_at
-       FROM users
-       WHERE email = ?
+      `SELECT u.id, u.email, u.password_hash, u.password_salt, u.created_at,
+              EXISTS(SELECT 1 FROM verified_emails v WHERE v.email = u.email) AS email_verified
+       FROM users u
+       WHERE u.email = ?
        LIMIT 1`,
     )
     .bind(email)
@@ -199,8 +282,108 @@ async function handleLogin(request, env) {
   return {
     ok: true,
     user: publicUser(user),
+    emailVerified: Boolean(user.email_verified),
     token: session.token,
     expiresAt: session.expiresAt,
+  };
+}
+
+async function handleEmailVerificationRequest(user, env) {
+  ensureDatabase(env);
+  if (await isEmailVerified(env.DB, user.email)) {
+    return {
+      ok: true,
+      sent: false,
+      email: user.email,
+      emailVerified: true,
+      message: "這個信箱已完成驗證。",
+    };
+  }
+
+  await createAndSendAuthCode(env, user.email, "email_verification");
+  return {
+    ok: true,
+    sent: true,
+    email: user.email,
+    emailVerified: false,
+    expiresInSeconds: AUTH_CODE_TTL_SECONDS,
+  };
+}
+
+async function handleEmailVerificationConfirm(request, user, env) {
+  ensureDatabase(env);
+  const body = await readJson(request);
+  const code = normalizeAuthCode(body?.code);
+  await consumeAuthCode(env.DB, env, user.email, "email_verification", code);
+  await markEmailVerified(env.DB, user.email, user.id);
+  return {
+    ok: true,
+    email: user.email,
+    emailVerified: true,
+  };
+}
+
+async function handlePasswordResetRequest(request, env) {
+  ensureDatabase(env);
+  const body = await readJson(request);
+  const email = normalizeEmail(body?.email);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw httpError(400, "invalid_email", "請輸入有效的信箱。");
+  }
+
+  const user = await env.DB
+    .prepare(`SELECT id, email FROM users WHERE email = ? LIMIT 1`)
+    .bind(email)
+    .first();
+
+  if (user) {
+    await createAndSendAuthCode(env, email, "password_reset");
+  }
+
+  return {
+    ok: true,
+    sent: true,
+    message: "如果信箱已註冊，驗證碼已寄出。",
+  };
+}
+
+async function handlePasswordResetConfirm(request, env) {
+  ensureDatabase(env);
+  const body = await readJson(request);
+  const email = normalizeEmail(body?.email);
+  const code = normalizeAuthCode(body?.code);
+  const password = String(body?.password ?? "");
+  validateEmailAndPassword(email, password);
+
+  const user = await env.DB
+    .prepare(`SELECT id FROM users WHERE email = ? LIMIT 1`)
+    .bind(email)
+    .first();
+  if (!user) {
+    throw invalidAuthCodeError();
+  }
+
+  await consumeAuthCode(env.DB, env, email, "password_reset", code);
+
+  const passwordSalt = randomHex(16);
+  const passwordHash = await hashPassword(password, passwordSalt);
+  await env.DB
+    .prepare(
+      `UPDATE users
+       SET password_hash = ?, password_salt = ?
+       WHERE id = ?`,
+    )
+    .bind(passwordHash, passwordSalt, user.id)
+    .run();
+
+  await env.DB
+    .prepare(`DELETE FROM auth_sessions WHERE user_id = ?`)
+    .bind(user.id)
+    .run();
+
+  return {
+    ok: true,
+    message: "密碼已更新，請使用新密碼登入。",
   };
 }
 
@@ -374,7 +557,8 @@ async function requireUser(request, env) {
   const now = new Date().toISOString();
   const session = await env.DB
     .prepare(
-      `SELECT s.user_id, u.id, u.email, u.created_at
+      `SELECT s.user_id, u.id, u.email, u.created_at,
+              EXISTS(SELECT 1 FROM verified_emails v WHERE v.email = u.email) AS email_verified
        FROM auth_sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.token_hash = ? AND s.expires_at > ?
@@ -390,6 +574,7 @@ async function requireUser(request, env) {
     id: session.id,
     email: session.email,
     created_at: session.created_at,
+    email_verified: session.email_verified,
   };
 }
 
@@ -406,6 +591,322 @@ async function createSession(db, userId) {
     .bind(tokenHash, userId, now.toISOString(), expiresAt)
     .run();
   return { token, expiresAt };
+}
+
+async function createAndSendAuthCode(env, email, purpose) {
+  ensureAuthCodeSecret(env);
+  ensureEmailConfig(env);
+
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedPurpose = String(purpose ?? "").trim();
+  if (!["email_verification", "password_reset"].includes(normalizedPurpose)) {
+    throw httpError(400, "invalid_purpose", "不支援的驗證碼用途。");
+  }
+
+  const now = new Date();
+  const recent = await env.DB
+    .prepare(
+      `SELECT created_at
+       FROM auth_email_codes
+       WHERE email = ? AND purpose = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+    .bind(normalizedEmail, normalizedPurpose)
+    .first();
+  if (recent?.created_at) {
+    const elapsedMs = now.getTime() - new Date(recent.created_at).getTime();
+    if (Number.isFinite(elapsedMs) && elapsedMs < AUTH_CODE_COOLDOWN_SECONDS * 1000) {
+      throw httpError(429, "too_many_requests", "驗證碼剛寄出，請稍等一下再重試。");
+    }
+  }
+
+  const code = randomNumericCode(6);
+  const codeSalt = randomHex(16);
+  const codeHash = await hashAuthCode(code, codeSalt, env);
+  const id = randomHex(16);
+  const createdAt = now.toISOString();
+  const expiresAt = new Date(now.getTime() + AUTH_CODE_TTL_SECONDS * 1000).toISOString();
+
+  await env.DB
+    .prepare(
+      `INSERT INTO auth_email_codes
+         (id, email, purpose, code_hash, code_salt, attempts, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+    )
+    .bind(id, normalizedEmail, normalizedPurpose, codeHash, codeSalt, createdAt, expiresAt)
+    .run();
+
+  try {
+    await sendAuthEmail(env, {
+      to: normalizedEmail,
+      purpose: normalizedPurpose,
+      code,
+    });
+  } catch (error) {
+    await env.DB
+      .prepare(`DELETE FROM auth_email_codes WHERE id = ?`)
+      .bind(id)
+      .run();
+    throw error;
+  }
+}
+
+async function consumeAuthCode(db, env, email, purpose, code) {
+  ensureAuthCodeSecret(env);
+  const normalizedCode = normalizeAuthCode(code);
+  if (!/^\d{6}$/.test(normalizedCode)) {
+    throw invalidAuthCodeError();
+  }
+
+  const now = new Date().toISOString();
+  const row = await db
+    .prepare(
+      `SELECT id, code_hash, code_salt, attempts
+       FROM auth_email_codes
+       WHERE email = ?
+         AND purpose = ?
+         AND consumed_at IS NULL
+         AND expires_at > ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+    .bind(normalizeEmail(email), purpose, now)
+    .first();
+
+  if (!row || row.attempts >= MAX_AUTH_CODE_ATTEMPTS) {
+    throw invalidAuthCodeError();
+  }
+
+  const expectedHash = await hashAuthCode(normalizedCode, row.code_salt, env);
+  if (expectedHash !== row.code_hash) {
+    await db
+      .prepare(`UPDATE auth_email_codes SET attempts = attempts + 1 WHERE id = ?`)
+      .bind(row.id)
+      .run();
+    throw invalidAuthCodeError();
+  }
+
+  await db
+    .prepare(`UPDATE auth_email_codes SET consumed_at = ? WHERE id = ?`)
+    .bind(now, row.id)
+    .run();
+}
+
+async function isEmailVerified(db, email) {
+  const row = await db
+    .prepare(`SELECT email FROM verified_emails WHERE email = ? LIMIT 1`)
+    .bind(normalizeEmail(email))
+    .first();
+  return Boolean(row);
+}
+
+async function markEmailVerified(db, email, userId) {
+  await db
+    .prepare(
+      `INSERT INTO verified_emails (email, user_id, verified_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(email) DO UPDATE SET
+         user_id = excluded.user_id,
+         verified_at = excluded.verified_at`,
+    )
+    .bind(normalizeEmail(email), userId, new Date().toISOString())
+    .run();
+}
+
+async function hashAuthCode(code, salt, env) {
+  return await sha256Hex(`${env.AUTH_CODE_SECRET}:${salt}:${normalizeAuthCode(code)}`);
+}
+
+function normalizeAuthCode(value) {
+  return String(value ?? "").replace(/\D+/g, "").slice(0, 6);
+}
+
+async function sendAuthEmail(env, { to, purpose, code }) {
+  const provider = getEmailProvider(env);
+  const fromEmail = String(env.EMAIL_FROM ?? "").trim();
+  const fromName = String(env.EMAIL_FROM_NAME ?? "Alpaca English").trim() || "Alpaca English";
+  const message = buildAuthEmailMessage(purpose, code);
+
+  if (provider === "resend") {
+    await sendResendEmail(env, {
+      to,
+      fromEmail,
+      fromName,
+      subject: message.subject,
+      text: message.text,
+      html: message.html,
+    });
+    return;
+  }
+
+  if (provider === "brevo") {
+    await sendBrevoEmail(env, {
+      to,
+      fromEmail,
+      fromName,
+      subject: message.subject,
+      text: message.text,
+      html: message.html,
+    });
+    return;
+  }
+
+  throw httpError(503, "email_provider_unsupported", "目前只支援 Brevo 或 Resend 免費寄信供應商。");
+}
+
+async function sendBrevoEmail(env, message) {
+  const apiKey = getEmailApiKey(env, "brevo");
+  const response = await fetchWithTimeout(
+    "https://api.brevo.com/v3/smtp/email",
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json; charset=utf-8",
+        "api-key": apiKey,
+        "User-Agent": "EN-Learning-Worker/0.1",
+      },
+      body: JSON.stringify({
+        sender: {
+          name: message.fromName,
+          email: message.fromEmail,
+        },
+        to: [{ email: message.to }],
+        subject: message.subject,
+        textContent: message.text,
+        htmlContent: message.html,
+      }),
+    },
+  );
+  await ensureEmailProviderOk(response, "Brevo");
+}
+
+async function sendResendEmail(env, message) {
+  const apiKey = getEmailApiKey(env, "resend");
+  const response = await fetchWithTimeout(
+    "https://api.resend.com/emails",
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json; charset=utf-8",
+        "User-Agent": "EN-Learning-Worker/0.1",
+      },
+      body: JSON.stringify({
+        from: `${message.fromName} <${message.fromEmail}>`,
+        to: [message.to],
+        subject: message.subject,
+        text: message.text,
+        html: message.html,
+      }),
+    },
+  );
+  await ensureEmailProviderOk(response, "Resend");
+}
+
+async function ensureEmailProviderOk(response, providerName) {
+  if (response.ok) {
+    return;
+  }
+
+  const body = await response.text();
+  throw httpError(
+    502,
+    "email_provider_error",
+    `${providerName} 寄信失敗：HTTP ${response.status}。${compactProviderError(body)}`,
+  );
+}
+
+function buildAuthEmailMessage(purpose, code) {
+  const isReset = purpose === "password_reset";
+  const title = isReset ? "重設密碼驗證碼" : "信箱驗證碼";
+  const subject = `Alpaca English ${title}`;
+  const action = isReset ? "重設密碼" : "完成信箱驗證";
+  const text = [
+    `你的 Alpaca English ${title}是：${code}`,
+    `請在 ${Math.round(AUTH_CODE_TTL_SECONDS / 60)} 分鐘內輸入，用來${action}。`,
+    "如果不是你本人操作，可以直接忽略這封信。",
+  ].join("\n");
+  const escapedCode = escapeHtml(code);
+  const escapedAction = escapeHtml(action);
+  const html = [
+    "<div style=\"font-family:Arial,'Noto Sans TC',sans-serif;line-height:1.6;color:#253247\">",
+    "<h2 style=\"margin:0 0 12px\">Alpaca English</h2>",
+    `<p>你的${escapeHtml(title)}是：</p>`,
+    `<p style=\"font-size:28px;font-weight:700;letter-spacing:6px;color:#2EA9B5\">${escapedCode}</p>`,
+    `<p>請在 ${Math.round(AUTH_CODE_TTL_SECONDS / 60)} 分鐘內輸入，用來${escapedAction}。</p>`,
+    "<p style=\"color:#667085\">如果不是你本人操作，可以直接忽略這封信。</p>",
+    "</div>",
+  ].join("");
+
+  return { subject, text, html };
+}
+
+function getEmailProvider(env) {
+  return String(env.EMAIL_PROVIDER ?? "brevo").trim().toLowerCase();
+}
+
+function getEmailApiKey(env, provider) {
+  const value = provider === "resend"
+    ? env.RESEND_API_KEY || env.EMAIL_API_KEY
+    : env.BREVO_API_KEY || env.EMAIL_API_KEY;
+  const apiKey = String(value ?? "").trim();
+  if (!apiKey) {
+    throw httpError(
+      503,
+      "email_not_configured",
+      provider === "resend"
+        ? "尚未設定 Resend 金鑰。請在 Cloudflare Worker 設定 RESEND_API_KEY。"
+        : "尚未設定 Brevo 金鑰。請在 Cloudflare Worker 設定 BREVO_API_KEY。",
+    );
+  }
+  return apiKey;
+}
+
+function ensureEmailConfig(env) {
+  const provider = getEmailProvider(env);
+  if (!["brevo", "resend"].includes(provider)) {
+    throw httpError(503, "email_provider_unsupported", "目前只支援 Brevo 或 Resend 免費寄信供應商。");
+  }
+
+  const fromEmail = String(env.EMAIL_FROM ?? "").trim();
+  if (!fromEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromEmail)) {
+    throw httpError(503, "email_not_configured", "尚未設定有效的寄件信箱 EMAIL_FROM。");
+  }
+
+  getEmailApiKey(env, provider);
+}
+
+function ensureAuthCodeSecret(env) {
+  if (!String(env.AUTH_CODE_SECRET ?? "").trim()) {
+    throw httpError(503, "auth_code_secret_missing", "尚未設定驗證碼安全密鑰 AUTH_CODE_SECRET。");
+  }
+}
+
+function invalidAuthCodeError() {
+  return httpError(400, "invalid_code", "驗證碼不正確或已過期，請重新取得。");
+}
+
+function randomNumericCode(length) {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => String(byte % 10)).join("");
+}
+
+function compactProviderError(body) {
+  const text = String(body ?? "").replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, 180) : "請檢查寄信服務金鑰與寄件信箱。";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 async function hashPassword(password, salt) {
@@ -462,6 +963,7 @@ function publicUser(user) {
     id: user.id,
     email: user.email,
     createdAt: user.created_at,
+    emailVerified: Boolean(user.email_verified),
   };
 }
 
