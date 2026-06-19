@@ -623,10 +623,6 @@ public class MainActivity extends Activity {
             addExampleCard(card, example, displayExampleTranslation(entry));
         }
 
-        if (!isBlank(entry.englishDefinition)) {
-            addDefinitionCard(card, firstDefinitionText(entry.englishDefinition));
-        }
-
         content.addView(card, fullWidth());
 
         if (entry.fromCache) addBadge("目前顯示本機快取資料");
@@ -708,32 +704,6 @@ public class MainActivity extends Activity {
 
         ImageButton speak = lightIconButton("朗讀例句", v -> speechController.speak(example));
         card.addView(speak, new LinearLayout.LayoutParams(dp(42), dp(42)));
-
-        LinearLayout.LayoutParams params = fullWidthNoMargin();
-        params.setMargins(0, dp(14), 0, dp(8));
-        parent.addView(card, params);
-    }
-
-    private void addDefinitionCard(LinearLayout parent, String definition) {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(12), dp(12), dp(12), dp(12));
-        card.setBackground(makeBg(0xFFFAFAFA, 0xFFE5E7EB, 8));
-
-        TextView label = new TextView(this);
-        label.setText("英文釋義");
-        label.setTextColor(0xFF9CA3AF);
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        label.setTypeface(Typeface.DEFAULT_BOLD);
-        card.addView(label);
-
-        TextView definitionView = new TextView(this);
-        definitionView.setText(definition);
-        definitionView.setTextColor(0xFF4B5563);
-        definitionView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
-        definitionView.setLineSpacing(0, 1.18f);
-        definitionView.setPadding(0, dp(6), 0, 0);
-        card.addView(definitionView);
 
         LinearLayout.LayoutParams params = fullWidthNoMargin();
         params.setMargins(0, dp(14), 0, dp(8));
@@ -1055,14 +1025,6 @@ public class MainActivity extends Activity {
         if (lower.startsWith("conjunction")) return "conj.";
         if (lower.startsWith("interjection")) return "int.";
         return part == null || part.trim().isEmpty() ? "義" : part.trim();
-    }
-
-    private String firstDefinitionText(String text) {
-        if (isBlank(text)) return "";
-        String cleaned = text.trim();
-        String[] pieces = cleaned.split("[.;]");
-        if (pieces.length == 0 || isBlank(pieces[0])) return cleaned;
-        return pieces[0].trim() + ".";
     }
 
     private String displayExample(WordEntry entry) {
