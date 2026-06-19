@@ -255,6 +255,21 @@ public class AppDatabase extends SQLiteOpenHelper {
         return words;
     }
 
+    public synchronized List<String> getAllRecentSearches() {
+        List<String> words = new ArrayList<>();
+        try (Cursor cursor = getReadableDatabase().query(
+                "recent_searches",
+                new String[]{"word"},
+                null,
+                null,
+                null,
+                null,
+                "searched_at DESC")) {
+            while (cursor.moveToNext()) words.add(cursor.getString(0));
+        }
+        return words;
+    }
+
     public synchronized long insertImportBatch(String fileName, String format, int total, int unique) {
         ContentValues values = new ContentValues();
         values.put("file_name", fileName);

@@ -225,11 +225,37 @@ public class MainActivity extends Activity {
         Button button = primaryButton("搜尋", R.drawable.ic_search, v -> lookupAndShow(input.getText().toString()));
         content.addView(button, fullWidth());
 
-        runBackground(() -> database.getRecentSearches(10), recent -> {
+        runBackground(() -> database.getAllRecentSearches(), recent -> {
             if (recent.isEmpty()) return;
-            addSubheading("搜尋紀錄");
+            addSubheadingWithAction("近期搜尋紀錄",
+                    recent.size() > 10 ? "完整記錄" : "",
+                    recent.size() > 10 ? v -> showFullSearchHistory() : null);
+            int displayCount = Math.min(10, recent.size());
+            for (int i = 0; i < displayCount; i++) {
+                String word = recent.get(i);
+                content.addView(wordRow(word, "", v -> lookupAndShow(word)));
+            }
+        });
+    }
+
+    private void showFullSearchHistory() {
+        resetContent();
+        addHeading("完整搜尋紀錄");
+        addBody("這裡保留所有查過的單字，最新的會排在最上面。");
+        content.addView(secondaryButton("返回搜尋", R.drawable.ic_search, v -> showSearch()), fullWidth());
+        showLoadingInline("正在整理搜尋紀錄...");
+        runBackground(() -> database.getAllRecentSearches(), recent -> {
+            resetContent();
+            addHeading("完整搜尋紀錄");
+            addBody("這裡保留所有查過的單字，最新的會排在最上面。");
+            content.addView(secondaryButton("返回搜尋", R.drawable.ic_search, v -> showSearch()), fullWidth());
+            if (recent.isEmpty()) {
+                addMonsterPanel("還沒有搜尋紀錄",
+                        "先查一個單字，小羊駝就會幫你把紀錄放在這裡。");
+                return;
+            }
             for (String word : recent) {
-                content.addView(wordRow(word, "查看", v -> lookupAndShow(word)));
+                content.addView(wordRow(word, "", v -> lookupAndShow(word)));
             }
         });
     }
@@ -457,6 +483,42 @@ public class MainActivity extends Activity {
         view.setPadding(0, dp(18), 0, dp(6));
         content.addView(view, fullWidth());
         return view;
+    }
+
+    private void addSubheadingWithAction(String text, String actionText, View.OnClickListener listener) {
+        if (actionText == null || actionText.trim().isEmpty() || listener == null) {
+            addSubheading(text);
+            return;
+        }
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(12), 0, dp(4));
+
+        TextView title = new TextView(this);
+        title.setText(text);
+        title.setTextColor(COLOR_INK);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        row.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button action = new Button(this);
+        action.setText(actionText);
+        action.setAllCaps(false);
+        action.setTextColor(COLOR_INK);
+        action.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        action.setTypeface(Typeface.DEFAULT_BOLD);
+        action.setMinHeight(dp(36));
+        action.setMinWidth(dp(92));
+        action.setPadding(dp(10), 0, dp(10), 0);
+        action.setBackground(makeBg(COLOR_LILAC, 0xFFD8B4FE, 8));
+        action.setOnClickListener(listener);
+        row.addView(action, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        content.addView(row, fullWidth());
     }
 
     private TextView addBody(String text) {
