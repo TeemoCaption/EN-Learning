@@ -40,17 +40,18 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int REQUEST_IMPORT_DOCUMENT = 4101;
-    private static final int COLOR_BG = 0xFFFFF7ED;
+    private static final int COLOR_BG = 0xFFF7F3EA;
     private static final int COLOR_SURFACE = 0xFFFFFFFF;
     private static final int COLOR_INK = 0xFF253247;
     private static final int COLOR_MUTED = 0xFF667085;
-    private static final int COLOR_MINT = 0xFF6EE7B7;
-    private static final int COLOR_MINT_DARK = 0xFF047857;
-    private static final int COLOR_TEAL = 0xFF18B7C9;
-    private static final int COLOR_CORAL = 0xFFFF7A59;
-    private static final int COLOR_LEMON = 0xFFFFF1A8;
-    private static final int COLOR_LILAC = 0xFFE9D5FF;
-    private static final int COLOR_BLUE = 0xFF3B82F6;
+    private static final int COLOR_MINT = 0xFFA8EACF;
+    private static final int COLOR_MINT_DARK = 0xFF2F8C78;
+    private static final int COLOR_TEAL = 0xFF2EA9B5;
+    private static final int COLOR_CORAL = 0xFFFF8A7A;
+    private static final int COLOR_LEMON = 0xFFFFE7A8;
+    private static final int COLOR_LILAC = 0xFFEADDFE;
+    private static final int COLOR_BLUE = 0xFF78A9FF;
+    private static final int COLOR_ALPACA_DARK = 0xFFD7A985;
 
     private AppDatabase database;
     private WordRepository repository;
@@ -102,8 +103,8 @@ public class MainActivity extends Activity {
         hero.setBackground(makeBg(COLOR_SURFACE, 0x00FFFFFF, 0));
 
         ImageView mascot = new ImageView(this);
-        mascot.setImageResource(R.drawable.ic_monster_mint);
-        mascot.setBackground(makeBg(0xFFE6FFF4, COLOR_MINT_DARK, 8));
+        mascot.setImageResource(R.drawable.ic_alpaca);
+        mascot.setBackground(makeBg(0xFFFFF8EE, COLOR_ALPACA_DARK, 8));
         mascot.setPadding(dp(5), dp(4), dp(5), dp(4));
         hero.addView(mascot, new LinearLayout.LayoutParams(dp(58), dp(50)));
 
@@ -111,12 +112,12 @@ public class MainActivity extends Activity {
         heroText.setOrientation(LinearLayout.VERTICAL);
         heroText.setPadding(dp(12), 0, 0, 0);
         TextView title = new TextView(this);
-        title.setText("Monster English");
+        title.setText("Alpaca English");
         title.setTextColor(COLOR_INK);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 25);
         TextView subtitle = new TextView(this);
-        subtitle.setText("查單字、匯入文件、整理收藏。");
+        subtitle.setText("課程與單字，都讓小羊駝陪你慢慢學。");
         subtitle.setTextColor(COLOR_MUTED);
         subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         subtitle.setSingleLine(false);
@@ -135,11 +136,11 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        nav.addView(navButton("首頁", R.drawable.ic_home, v -> showHome()), buttonWeight());
+        nav.addView(navButton("主頁", R.drawable.ic_home, v -> showHome()), buttonWeight());
+        nav.addView(navButton("單字", R.drawable.ic_book, v -> showVocabularyHome()), buttonWeight());
         nav.addView(navButton("搜尋", R.drawable.ic_search, v -> showSearch()), buttonWeight());
         nav.addView(navButton("收藏", R.drawable.ic_book, v -> showBook()), buttonWeight());
         nav.addView(navButton("匯入", R.drawable.ic_import, v -> showImport()), buttonWeight());
-        nav.addView(navButton("待補", R.drawable.ic_pending, v -> showPending()), buttonWeight());
 
         ScrollView scrollView = new ScrollView(this);
         content = new LinearLayout(this);
@@ -156,8 +157,32 @@ public class MainActivity extends Activity {
 
     private void showHome() {
         resetContent();
+        addMonsterPanel("今天想讓小羊駝陪你學什麼？",
+                "先選一個方向開始。課程會放多益文法教學，單字會進入搜尋、匯入、收藏與朗讀功能。");
+
+        content.addView(homeFeatureCard(
+                R.drawable.ic_home,
+                "課程",
+                "多益文法教學",
+                "文法重點、題型整理與練習會放在這裡。",
+                0xFFFFF1C7,
+                0xFFFFC857,
+                v -> showCoursePlaceholder()), fullWidth());
+
+        content.addView(homeFeatureCard(
+                R.drawable.ic_book,
+                "單字",
+                "搜尋、匯入、收藏",
+                "查中文意思、音標、例句、同義字與近義字。",
+                0xFFE0F7EF,
+                COLOR_MINT_DARK,
+                v -> showVocabularyHome()), fullWidth());
+    }
+
+    private void showVocabularyHome() {
+        resetContent();
         addMonsterPanel("今天想學什麼單字？",
-                "可以手動搜尋，也可以匯入文件。小怪獸會整理中文意思、音標、例句、同義字、近義字，還能朗讀英文。");
+                "可以手動搜尋，也可以匯入文件。小羊駝會整理中文意思、音標、例句、同義字、近義字，還能朗讀英文。");
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -174,10 +199,17 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void showCoursePlaceholder() {
+        resetContent();
+        addMonsterPanel("課程功能準備中",
+                "這裡會接多益文法教學。現在先完成單字功能，小羊駝會把課程入口先乖乖留好。");
+        content.addView(primaryButton("前往單字", R.drawable.ic_book, v -> showVocabularyHome()), fullWidth());
+    }
+
     private void showSearch() {
         resetContent();
-        addHeading("怪獸單字搜尋");
-        addBody("輸入英文單字，小怪獸會優先上網找資料；成功後會存進本機快取，離線時也能看已查過的單字。");
+        addHeading("羊駝單字搜尋");
+        addBody("輸入英文單字，小羊駝會優先上網找資料；成功後會存進本機快取，離線時也能看已查過的單字。");
 
         EditText input = new EditText(this);
         input.setSingleLine(true);
@@ -215,7 +247,7 @@ public class MainActivity extends Activity {
     private void showWordDetail(WordEntry entry) {
         resetContent();
         if (entry == null) {
-            addHeading("怪獸還沒找到");
+            addHeading("小羊駝還沒找到");
             addBody("目前無法取得這個單字，已保留到待補清單。");
             return;
         }
@@ -258,7 +290,7 @@ public class MainActivity extends Activity {
             addHeading("收藏單字");
             if (words.isEmpty()) {
                 addMonsterPanel("收藏還是空的",
-                        "先餵一個單字，或丟一份文件給小怪獸，牠就會開始整理單字卡。");
+                        "先餵一個單字，或丟一份文件給小羊駝，牠就會開始整理單字卡。");
                 content.addView(primaryButton("去搜尋", R.drawable.ic_search, v -> showSearch()), fullWidth());
                 content.addView(secondaryButton("去匯入", R.drawable.ic_import, v -> showImport()), fullWidth());
                 return;
@@ -322,7 +354,7 @@ public class MainActivity extends Activity {
                     if (i % 5 == 0 || i == words.size() - 1) {
                         int done = i + 1;
                         mainHandler.post(() -> progress.setText("已整理 " + done + " / " + words.size()
-                                + " 個單字，小怪獸正在整理。"));
+                                + " 個單字，小羊駝正在整理。"));
                     }
                 }
 
@@ -370,7 +402,7 @@ public class MainActivity extends Activity {
             addHeading("待補清單");
             if (words.isEmpty()) {
                 addMonsterPanel("目前沒有待補單字",
-                        "目前沒有待補單字，小怪獸暫時不用加班。");
+                        "目前沒有待補單字，小羊駝暫時不用加班。");
                 return;
             }
             content.addView(primaryButton("全部重查", R.drawable.ic_pending, v -> retryPending(words)), fullWidth());
@@ -727,8 +759,8 @@ public class MainActivity extends Activity {
         row.setOnClickListener(listener);
 
         ImageView monster = new ImageView(this);
-        monster.setImageResource(R.drawable.ic_monster_mint);
-        monster.setBackground(makeBg(0xFFFFF8D6, 0xFFFFD166, 8));
+        monster.setImageResource(R.drawable.ic_alpaca);
+        monster.setBackground(makeBg(0xFFFFF8EE, COLOR_ALPACA_DARK, 8));
         monster.setPadding(dp(4), dp(4), dp(4), dp(4));
         row.addView(monster, new LinearLayout.LayoutParams(dp(46), dp(46)));
 
@@ -827,6 +859,63 @@ public class MainActivity extends Activity {
         return card;
     }
 
+    private LinearLayout homeFeatureCard(int iconRes, String title, String subtitle, String body,
+                                         int color, int strokeColor, View.OnClickListener listener) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(18), dp(18), dp(18), dp(18));
+        card.setMinimumHeight(dp(142));
+        card.setBackground(makeBg(color, strokeColor, 8));
+        card.setElevation(dp(2));
+        card.setClickable(true);
+        card.setFocusable(true);
+        card.setContentDescription(title + "，" + subtitle);
+        card.setOnClickListener(listener);
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(iconRes);
+        icon.setColorFilter(COLOR_INK);
+        icon.setBackground(makeBg(0x77FFFFFF, 0x00FFFFFF, 8));
+        icon.setPadding(dp(12), dp(12), dp(12), dp(12));
+        card.addView(icon, new LinearLayout.LayoutParams(dp(68), dp(68)));
+
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        texts.setPadding(dp(16), 0, 0, 0);
+
+        TextView titleView = new TextView(this);
+        titleView.setText(title);
+        titleView.setTextColor(COLOR_INK);
+        titleView.setTypeface(Typeface.DEFAULT_BOLD);
+        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        texts.addView(titleView);
+
+        TextView subtitleView = new TextView(this);
+        subtitleView.setText(subtitle);
+        subtitleView.setTextColor(COLOR_INK);
+        subtitleView.setTypeface(Typeface.DEFAULT_BOLD);
+        subtitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        subtitleView.setPadding(0, dp(2), 0, dp(4));
+        texts.addView(subtitleView);
+
+        TextView bodyView = new TextView(this);
+        bodyView.setText(body);
+        bodyView.setTextColor(COLOR_MUTED);
+        bodyView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        bodyView.setLineSpacing(0, 1.15f);
+        texts.addView(bodyView);
+
+        card.addView(texts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        ImageView arrow = new ImageView(this);
+        arrow.setImageResource(R.drawable.ic_chevron_right);
+        arrow.setColorFilter(COLOR_INK);
+        card.addView(arrow, new LinearLayout.LayoutParams(dp(26), dp(26)));
+
+        return card;
+    }
+
     private Button primaryButton(String text, View.OnClickListener listener) {
         Button button = new Button(this);
         button.setText(text);
@@ -912,8 +1001,8 @@ public class MainActivity extends Activity {
         panel.setBackground(makeBg(COLOR_LEMON, 0xFFFFD166, 8));
 
         ImageView monster = new ImageView(this);
-        monster.setImageResource(R.drawable.ic_monster_mint);
-        monster.setBackground(makeBg(0xFFFFE7DE, COLOR_CORAL, 8));
+        monster.setImageResource(R.drawable.ic_alpaca);
+        monster.setBackground(makeBg(0xFFFFF8EE, COLOR_ALPACA_DARK, 8));
         monster.setPadding(dp(5), dp(5), dp(5), dp(5));
         panel.addView(monster, new LinearLayout.LayoutParams(dp(58), dp(58)));
 
