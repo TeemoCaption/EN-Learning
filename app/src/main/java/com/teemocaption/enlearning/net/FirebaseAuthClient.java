@@ -177,6 +177,8 @@ public class FirebaseAuthClient {
     }
 
     private static String readableFirebaseError(String firebaseCode, int httpCode) {
+        String normalizedCode = firebaseCode == null ? "" : firebaseCode.trim();
+        String upperCode = normalizedCode.toUpperCase();
         if ("EMAIL_EXISTS".equals(firebaseCode)) return "這個信箱已註冊，請確認密碼。";
         if ("EMAIL_NOT_FOUND".equals(firebaseCode)) return "這個信箱尚未註冊。";
         if ("INVALID_PASSWORD".equals(firebaseCode)
@@ -196,6 +198,26 @@ public class FirebaseAuthClient {
         }
         if ("TOKEN_EXPIRED".equals(firebaseCode) || "INVALID_ID_TOKEN".equals(firebaseCode)) {
             return "登入狀態已過期，請重新登入。";
+        }
+        if ("CONFIGURATION_NOT_FOUND".equals(firebaseCode)) {
+            return "Firebase Authentication 尚未完成設定，請到 Firebase Console 啟用 Email/Password 登入。";
+        }
+        if (httpCode == 403) {
+            if (upperCode.contains("API KEY NOT VALID") || upperCode.contains("INVALID API KEY")) {
+                return "Firebase Web API Key 不正確，請用 Firebase 專案設定裡的 Web API Key 重新建置 APP。";
+            }
+            if (upperCode.contains("REQUESTS FROM THIS ANDROID CLIENT")
+                    || upperCode.contains("API_KEY_ANDROID_APP_BLOCKED")
+                    || upperCode.contains("BLOCKED")) {
+                return "Firebase API Key 的 Android 應用程式限制擋住這個 APP，請允許套件 com.teemocaption.enlearning 與目前簽章 SHA-1。";
+            }
+            if (upperCode.contains("IDENTITY TOOLKIT")
+                    || upperCode.contains("SERVICE_DISABLED")
+                    || upperCode.contains("API HAS NOT BEEN USED")
+                    || upperCode.contains("PERMISSION_DENIED")) {
+                return "Firebase Authentication API 尚未啟用，請到 Firebase Console 啟用 Email/Password 登入後再試。";
+            }
+            return "Firebase 拒絕目前的 Web API Key，請確認 Key 屬於同一個 Firebase 專案，且 Authentication 已啟用。";
         }
         return "Firebase 回覆 HTTP " + httpCode + "，請稍後再試。";
     }

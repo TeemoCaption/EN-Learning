@@ -152,6 +152,13 @@ FIREBASE_PROJECT_ID = "你的 Firebase Project ID"
 FIREBASE_PROJECT_ID=你的 Firebase Project ID
 ```
 
+如果 Android 登入顯示 Firebase HTTP 403，請優先檢查：
+
+- Android 建置時是否帶入 Firebase 專案設定頁的 Web API Key，不是 Google 翻譯 API key。
+- Firebase Console 的 Authentication -> Sign-in method 是否已啟用 Email/Password。
+- Google Cloud Console 的 API Key 限制是否擋住 Android App；若有限制，請允許套件 `com.teemocaption.enlearning` 與目前 APK 簽章 SHA-1。
+- Worker 的 `FIREBASE_PROJECT_ID` 是否與 Android 使用的 Web API Key 屬於同一個 Firebase 專案。
+
 設定 Google 翻譯金鑰：
 
 ```powershell
