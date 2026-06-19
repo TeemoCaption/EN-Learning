@@ -268,11 +268,11 @@ public class MainActivity extends Activity {
     private void showSearch() {
         resetContent();
         addHeading("羊駝單字搜尋");
-        addBody("輸入英文單字，小羊駝會優先上網找資料；收藏會存到會員雲端單字本，不會寫入手機本機收藏快取。");
+        addBody("輸入英文單字或短片語，小羊駝會優先上網找資料；收藏會存到會員雲端單字本，不會寫入手機本機收藏快取。");
 
         EditText input = new EditText(this);
         input.setSingleLine(true);
-        input.setHint("例如 revenue、expand、companies");
+        input.setHint("例如 revenue、look up、take care of");
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         input.setTextColor(COLOR_INK);
         input.setHintTextColor(0xFF9CA3AF);
@@ -374,7 +374,7 @@ public class MainActivity extends Activity {
     private void lookupAndShow(String rawWord) {
         List<String> candidates = WordNormalizer.lookupCandidates(rawWord);
         if (candidates.isEmpty()) {
-            Toast.makeText(this, "請輸入英文單字喔。", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "請輸入英文單字或短片語喔。", Toast.LENGTH_SHORT).show();
             return;
         }
         showLoading("正在優先查詢網路資料：" + candidates.get(0));
@@ -394,6 +394,25 @@ public class MainActivity extends Activity {
         bookSwipeEntries = new ArrayList<>(words);
         bookSwipeIndex = Math.max(0, Math.min(index, bookSwipeEntries.size() - 1));
         renderWordDetail(bookSwipeEntries.get(bookSwipeIndex));
+    }
+
+    private void openBookWordDetail(List<WordEntry> words, int index) {
+        if (words == null || words.isEmpty() || index < 0 || index >= words.size()) {
+            showWordDetail(null);
+            return;
+        }
+        WordEntry selected = words.get(index);
+        showLoading("正在搜尋單字資訊：" + selected.word);
+        runBackground(
+                () -> wordApiClient.lookup(selected.word),
+                refreshed -> {
+                    refreshed.favorite = true;
+                    refreshed.familiarity = selected.familiarity;
+                    words.set(index, refreshed);
+                    String normalized = normalizeWord(refreshed.word);
+                    if (!normalized.isEmpty()) cloudFavoriteWords.add(normalized);
+                    showBookWordDetail(words, index);
+                });
     }
 
     private void renderWordDetail(WordEntry entry) {
@@ -588,7 +607,7 @@ public class MainActivity extends Activity {
             for (int i = 0; i < words.size(); i++) {
                 WordEntry entry = words.get(i);
                 int index = i;
-                content.addView(wordRow(entry.word, entry.chineseMeaning, v -> showBookWordDetail(words, index)));
+                content.addView(wordRow(entry.word, entry.chineseMeaning, v -> openBookWordDetail(words, index)));
             }
         });
     }
@@ -610,9 +629,9 @@ public class MainActivity extends Activity {
         }
         resetContent();
         addHeading("匯入文件");
-        addBody("支援 txt、csv、docx 與可選取文字的 pdf。掃描型 PDF 第一階段會提示不支援圖片文字辨識。");
+        addBody("支援 txt、csv、docx 與可選取文字的 pdf。匯入時只會抽出英文單字或片語；掃描型 PDF 第一階段會提示不支援圖片文字辨識。");
         content.addView(primaryButton("選擇文件", R.drawable.ic_import, v -> openDocumentPicker()), fullWidth());
-        addBody("匯入後會先抽出英文單字、去重，再逐字網路查詢中文意思、音標與例句，整理好的單字會直接加入雲端收藏頁。");
+        addBody("匯入後會先抽出英文單字或片語、去重，再逐項網路查詢中文意思、音標與例句，整理好的項目會直接加入雲端收藏頁。");
     }
 
     private void openDocumentPicker() {
@@ -669,7 +688,7 @@ public class MainActivity extends Activity {
                     if (i % 5 == 0 || i == words.size() - 1) {
                         int done = i + 1;
                         mainHandler.post(() -> progress.setText("已整理 " + done + " / " + words.size()
-                                + " 個單字，小羊駝正在整理。"));
+                                + " 個英文項目，小羊駝正在整理。"));
                     }
                 }
 
@@ -700,7 +719,7 @@ public class MainActivity extends Activity {
         }
         addField("文件", summary.fileName);
         addField("格式", summary.format);
-        addField("去重後單字數", String.valueOf(summary.unique));
+        addField("去重後英文項目數", String.valueOf(summary.unique));
         addField("成功補齊", String.valueOf(summary.success));
         addField("部分補齊", String.valueOf(summary.partial));
         addField("需補查資料", String.valueOf(summary.failed));

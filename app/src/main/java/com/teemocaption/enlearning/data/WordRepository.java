@@ -16,7 +16,7 @@ public class WordRepository {
 
     public synchronized WordEntry lookupNetworkFirst(String rawWord) {
         List<String> candidates = WordNormalizer.lookupCandidates(rawWord);
-        if (candidates.isEmpty()) return createPending(rawWord, "請輸入英文單字");
+        if (candidates.isEmpty()) return createPending(rawWord, "請輸入英文單字或短片語");
         String word = candidates.get(0);
 
         Exception lastError = null;
