@@ -363,8 +363,23 @@ public class WordApiClient {
                 : connection.getErrorStream();
         String responseBody = readStream(stream);
         connection.disconnect();
-        if (code < 200 || code >= 300) throw new IOException("HTTP " + code + ": " + responseBody);
+        if (code < 200 || code >= 300) throw new IOException(readBackendErrorMessage(responseBody, code));
         return responseBody;
+    }
+
+    private static String readBackendErrorMessage(String responseBody, int code) {
+        if (responseBody != null && !responseBody.trim().isEmpty()) {
+            try {
+                JSONObject object = new JSONObject(responseBody);
+                JSONObject error = object.optJSONObject("error");
+                String message = error == null ? object.optString("message", "")
+                        : error.optString("message", "");
+                if (!message.trim().isEmpty()) return message.trim();
+            } catch (JSONException ignored) {
+                // Fall through to a compact HTTP message below.
+            }
+        }
+        return "後端服務回覆 HTTP " + code + "，請稍後再試。";
     }
 
     private static void throwBackendError(JSONObject object) throws IOException {

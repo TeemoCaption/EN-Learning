@@ -13,6 +13,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.util.Patterns;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -39,6 +40,7 @@ import com.teemocaption.enlearning.util.WordNormalizer;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -320,13 +322,21 @@ public class MainActivity extends Activity {
     }
 
     private void showMemberLogin() {
+        showMemberLogin("", "");
+    }
+
+    private void showMemberLogin(String errorMessage, String initialEmail) {
         resetContent();
         addHeading("會員登入");
         addBody("登入後，收藏單字會存到雲端資料庫；這台手機不再保存本機收藏快取。");
+        if (!isBlank(errorMessage)) {
+            addErrorMessage(errorMessage);
+        }
 
         EditText email = new EditText(this);
         email.setSingleLine(true);
         email.setHint("信箱");
+        email.setText(safeString(initialEmail));
         email.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
         email.setTextColor(COLOR_INK);
         email.setHintTextColor(0xFF9CA3AF);
@@ -349,15 +359,27 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.addView(primaryButton("登入", R.drawable.ic_book,
-                v -> authenticateMember(false, email.getText().toString(), password.getText().toString())),
+                v -> authenticateMember(false, email, password)),
                 buttonWeight());
         row.addView(secondaryButton("註冊", R.drawable.ic_import,
-                v -> authenticateMember(true, email.getText().toString(), password.getText().toString())),
+                v -> authenticateMember(true, email, password)),
                 buttonWeight());
         content.addView(row, fullWidth());
     }
 
-    private void authenticateMember(boolean register, String email, String password) {
+    private void authenticateMember(boolean register, EditText emailInput, EditText passwordInput) {
+        String email = emailInput.getText().toString().trim().toLowerCase(Locale.US);
+        String password = passwordInput.getText().toString();
+        if (!isValidEmail(email)) {
+            emailInput.setError("請輸入有效的信箱");
+            Toast.makeText(this, "請輸入有效的信箱，例如 name@example.com。", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (password.length() < 8) {
+            passwordInput.setError("密碼至少 8 個字元");
+            Toast.makeText(this, "密碼至少需要 8 個字元。", Toast.LENGTH_LONG).show();
+            return;
+        }
         String action = register ? "註冊" : "登入";
         showLoading(action + "中，正在連線到雲端會員服務。");
         runBackground(
@@ -368,7 +390,8 @@ public class MainActivity extends Activity {
                     saveAuthSession(session);
                     Toast.makeText(this, action + "成功。", Toast.LENGTH_SHORT).show();
                     showBook();
-                });
+                },
+                error -> showMemberLogin(error, email));
     }
 
     private void lookupAndShow(String rawWord) {
@@ -797,6 +820,19 @@ public class MainActivity extends Activity {
         view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         view.setLineSpacing(0, 1.2f);
         view.setPadding(0, dp(4), 0, dp(10));
+        content.addView(view, fullWidth());
+        return view;
+    }
+
+    private TextView addErrorMessage(String text) {
+        TextView view = new TextView(this);
+        view.setText(text == null ? "" : text);
+        view.setTextColor(0xFF9F1239);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        view.setLineSpacing(0, 1.15f);
+        view.setPadding(dp(12), dp(10), dp(12), dp(10));
+        view.setBackground(makeBg(0xFFFFE4E6, 0xFFFDA4AF, 8));
         content.addView(view, fullWidth());
         return view;
     }
@@ -1435,6 +1471,10 @@ public class MainActivity extends Activity {
         return value == null || value.trim().isEmpty();
     }
 
+    private boolean isValidEmail(String value) {
+        return !isBlank(value) && Patterns.EMAIL_ADDRESS.matcher(value.trim()).matches();
+    }
+
     private String safeString(String value) {
         return value == null ? "" : value;
     }
@@ -1482,17 +1522,33 @@ public class MainActivity extends Activity {
     }
 
     private <T> void runBackground(BackgroundTask<T> task, UiCallback<T> callback) {
+        runBackground(task, callback, null);
+    }
+
+    private <T> void runBackground(BackgroundTask<T> task, UiCallback<T> callback, ErrorCallback errorCallback) {
         executor.execute(() -> {
             try {
                 T result = task.run();
                 mainHandler.post(() -> callback.onResult(result));
             } catch (Exception error) {
-                mainHandler.post(() -> Toast.makeText(
-                        this,
-                        "操作失敗：" + (error.getMessage() == null ? error.toString() : error.getMessage()),
-                        Toast.LENGTH_LONG).show());
+                mainHandler.post(() -> {
+                    String message = readableError(error);
+                    if (errorCallback != null) {
+                        errorCallback.onError(message);
+                    } else {
+                        Toast.makeText(this, "操作失敗：" + message, Toast.LENGTH_LONG).show();
+                    }
+                });
             }
         });
+    }
+
+    private String readableError(Exception error) {
+        String message = error == null || error.getMessage() == null ? "" : error.getMessage().trim();
+        if (message.isEmpty()) {
+            return error == null ? "未知錯誤。" : error.toString();
+        }
+        return message;
     }
 
     private interface BackgroundTask<T> {
@@ -1501,6 +1557,10 @@ public class MainActivity extends Activity {
 
     private interface UiCallback<T> {
         void onResult(T result);
+    }
+
+    private interface ErrorCallback {
+        void onError(String message);
     }
 
     private static class ImportSummary {
