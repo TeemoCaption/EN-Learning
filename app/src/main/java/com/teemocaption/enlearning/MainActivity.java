@@ -550,9 +550,9 @@ public class MainActivity extends Activity {
 
         addMeaningRows(card, entry);
 
-        if (entry.examples != null && !entry.examples.isEmpty()) {
-            addExampleCard(card, entry.examples.get(0));
-        } else if (!isBlank(entry.englishDefinition)) {
+        addExampleCard(card, displayExample(entry));
+
+        if (!isBlank(entry.englishDefinition)) {
             addDefinitionCard(card, firstDefinitionText(entry.englishDefinition));
         }
 
@@ -612,12 +612,24 @@ public class MainActivity extends Activity {
         card.setPadding(dp(12), dp(12), dp(10), dp(12));
         card.setBackground(makeBg(0xFFFAFAFA, 0xFFE5E7EB, 8));
 
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+
+        TextView label = new TextView(this);
+        label.setText("例句");
+        label.setTextColor(0xFF9CA3AF);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        label.setTypeface(Typeface.DEFAULT_BOLD);
+        texts.addView(label);
+
         TextView exampleView = new TextView(this);
         exampleView.setText(example);
         exampleView.setTextColor(0xFF4B5563);
         exampleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
         exampleView.setLineSpacing(0, 1.18f);
-        card.addView(exampleView, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        exampleView.setPadding(0, dp(6), dp(8), 0);
+        texts.addView(exampleView);
+        card.addView(texts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
         ImageButton speak = lightIconButton("朗讀例句", v -> speechController.speak(example));
         card.addView(speak, new LinearLayout.LayoutParams(dp(42), dp(42)));
@@ -931,6 +943,15 @@ public class MainActivity extends Activity {
         String[] pieces = cleaned.split("[.;]");
         if (pieces.length == 0 || isBlank(pieces[0])) return cleaned;
         return pieces[0].trim() + ".";
+    }
+
+    private String displayExample(WordEntry entry) {
+        if (entry != null && entry.examples != null && !entry.examples.isEmpty()) {
+            String example = entry.examples.get(0);
+            if (!isBlank(example)) return example.trim();
+        }
+        String word = entry == null || isBlank(entry.word) ? "this word" : entry.word.trim();
+        return "I learned the word \"" + word + "\" in my English notebook.";
     }
 
     private boolean isBlank(String value) {
