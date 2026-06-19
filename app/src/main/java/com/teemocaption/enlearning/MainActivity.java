@@ -469,18 +469,6 @@ public class MainActivity extends Activity {
         return view;
     }
 
-    private void addBadge(String text) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTextColor(0xFF92400E);
-        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        view.setBackground(makeBg(COLOR_LEMON, 0xFFFFD166, 8));
-        view.setPadding(dp(10), dp(8), dp(10), dp(8));
-        LinearLayout.LayoutParams params = fullWidth();
-        params.setMargins(0, dp(4), 0, dp(8));
-        content.addView(view, params);
-    }
-
     private void addField(String label, String value) {
         if (value == null || value.trim().isEmpty()) return;
         addSubheading(label);
@@ -624,8 +612,6 @@ public class MainActivity extends Activity {
         }
 
         content.addView(card, fullWidth());
-
-        if (entry.fromCache) addBadge("目前顯示本機快取資料");
     }
 
     private void addMeaningRows(LinearLayout parent, WordEntry entry) {
