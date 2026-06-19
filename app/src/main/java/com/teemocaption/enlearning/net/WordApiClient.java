@@ -87,17 +87,6 @@ public class WordApiClient {
         if (!object.optBoolean("ok", false)) throwBackendError(object);
     }
 
-    public int updateBookFamiliarity(String token, String word, int familiarity)
-            throws IOException, JSONException {
-        JSONObject body = new JSONObject();
-        body.put("word", word);
-        body.put("familiarity", familiarity);
-        JSONObject object = new JSONObject(request("POST",
-                backendUrl("book/familiarity"), body.toString(), token));
-        if (!object.optBoolean("ok", false)) throwBackendError(object);
-        return object.optInt("familiarity", familiarity);
-    }
-
     private AuthSession authenticate(String path, String email, String password)
             throws IOException, JSONException {
         JSONObject body = new JSONObject();

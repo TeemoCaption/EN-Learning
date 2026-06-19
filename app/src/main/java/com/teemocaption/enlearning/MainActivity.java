@@ -427,16 +427,9 @@ public class MainActivity extends Activity {
 
         if (isCloudFavorite(entry.word) || entry.favorite) {
             entry.favorite = true;
-            addFamiliarityControls(entry);
         }
         addClickableWordListField("同義字", entry.synonyms);
         addClickableWordListField("近義字", entry.relatedWords);
-    }
-
-    private void updateCurrentBookEntry(WordEntry entry) {
-        if (entry != null && hasBookSwipeContext() && isCurrentBookWord(entry.word)) {
-            bookSwipeEntries.set(bookSwipeIndex, entry);
-        }
     }
 
     private void clearBookSwipeContext() {
@@ -513,40 +506,6 @@ public class MainActivity extends Activity {
                 && x <= location[0] + view.getWidth()
                 && y >= location[1]
                 && y <= location[1] + view.getHeight();
-    }
-
-    private void addFamiliarityControls(WordEntry entry) {
-        String word = entry.word;
-        int familiarity = entry.familiarity;
-        addSubheading("熟悉度：" + familiarity + " / 5");
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.addView(secondaryButton("降低", v -> {
-            updateCloudFamiliarity(entry, familiarity - 1);
-        }), buttonWeight());
-        row.addView(secondaryButton("提高", v -> {
-            updateCloudFamiliarity(entry, familiarity + 1);
-        }), buttonWeight());
-        row.addView(dangerButton("移除", v -> {
-            removeCloudFavorite(entry, null);
-        }), buttonWeight());
-        content.addView(row, fullWidth());
-    }
-
-    private void updateCloudFamiliarity(WordEntry entry, int requestedFamiliarity) {
-        if (!isLoggedIn()) {
-            showMemberLogin();
-            return;
-        }
-        int next = Math.max(0, Math.min(5, requestedFamiliarity));
-        runBackground(
-                () -> wordApiClient.updateBookFamiliarity(authToken, entry.word, next),
-                updated -> {
-                    entry.familiarity = updated;
-                    entry.favorite = true;
-                    updateCurrentBookEntry(entry);
-                    renderWordDetail(entry);
-                });
     }
 
     private void removeCloudFavorite(WordEntry entry, ImageButton favoriteButton) {
