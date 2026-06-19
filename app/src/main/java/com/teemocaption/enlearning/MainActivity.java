@@ -248,7 +248,7 @@ public class MainActivity extends Activity {
         resetContent();
         if (entry == null) {
             addHeading("小羊駝還沒找到");
-            addBody("目前無法取得這個單字，已保留到待補清單。");
+            addBody("目前無法取得這個單字，已保留到補查清單。");
             return;
         }
 
@@ -388,21 +388,20 @@ public class MainActivity extends Activity {
         addField("去重後單字數", String.valueOf(summary.unique));
         addField("成功補齊", String.valueOf(summary.success));
         addField("部分補齊", String.valueOf(summary.partial));
-        addField("待補資料", String.valueOf(summary.failed));
+        addField("需補查資料", String.valueOf(summary.failed));
         content.addView(primaryButton("查看收藏", R.drawable.ic_book, v -> showBook()), fullWidth());
-        content.addView(secondaryButton("查看待補", R.drawable.ic_pending, v -> showPending()), fullWidth());
     }
 
     private void showPending() {
         resetContent();
-        addHeading("待補清單");
+        addHeading("補查清單");
         addBody("網路失敗、查無完整資料或匯入時部分補齊的單字會先放在這裡。");
         runBackground(() -> database.getPendingWords(), words -> {
             resetContent();
-            addHeading("待補清單");
+            addHeading("補查清單");
             if (words.isEmpty()) {
-                addMonsterPanel("目前沒有待補單字",
-                        "目前沒有待補單字，小羊駝暫時不用加班。");
+                addMonsterPanel("目前沒有需補查單字",
+                        "目前沒有需補查單字，小羊駝暫時不用加班。");
                 return;
             }
             content.addView(primaryButton("全部重查", R.drawable.ic_pending, v -> retryPending(words)), fullWidth());
@@ -413,7 +412,7 @@ public class MainActivity extends Activity {
     }
 
     private void retryPending(List<String> words) {
-        showLoading("正在重新補查待補單字...");
+        showLoading("正在重新補查單字...");
         executor.execute(() -> {
             for (String word : words) {
                 repository.lookupNetworkFirst(word);
@@ -579,11 +578,6 @@ public class MainActivity extends Activity {
         report.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         top.addView(report, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        if (entry.partial) {
-            TextView warn = detailPill("待補", 0xFFFFF7D6, 0xFFEAB308, 0xFF92400E);
-            top.addView(warn);
-        }
-
         ImageButton favorite = roundIconButton(R.drawable.ic_heart, "加入收藏", 0xFFE83E65, 0xFFE83E65, v -> {
             repository.addToBook(entry, "manual", "手動搜尋");
             Toast.makeText(this, "已加入收藏。", Toast.LENGTH_SHORT).show();
@@ -635,12 +629,12 @@ public class MainActivity extends Activity {
 
         content.addView(card, fullWidth());
 
-        if (entry.fromCache) addBadge("目前顯示本機快取或待補資料");
+        if (entry.fromCache) addBadge("目前顯示本機快取資料");
     }
 
     private void addMeaningRows(LinearLayout parent, WordEntry entry) {
         List<String> parts = splitPartOfSpeech(entry.partOfSpeech);
-        String meaning = isBlank(entry.chineseMeaning) ? "待補中文意思" : entry.chineseMeaning.trim();
+        String meaning = isBlank(entry.chineseMeaning) ? "中文意思補查中" : entry.chineseMeaning.trim();
         if (parts.isEmpty()) {
             parent.addView(meaningRow("義", meaning), compactFullWidth());
             return;
@@ -1036,18 +1030,6 @@ public class MainActivity extends Activity {
             drawable.setStroke(dp(1), strokeColor);
         }
         return drawable;
-    }
-
-    private TextView detailPill(String text, int color, int strokeColor, int textColor) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTextColor(textColor);
-        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        view.setTypeface(Typeface.DEFAULT_BOLD);
-        view.setGravity(Gravity.CENTER);
-        view.setPadding(dp(10), dp(6), dp(10), dp(6));
-        view.setBackground(makeBg(color, strokeColor, 8));
-        return view;
     }
 
     private List<String> splitPartOfSpeech(String partOfSpeech) {
